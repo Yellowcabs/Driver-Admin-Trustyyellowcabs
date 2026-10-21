@@ -24,6 +24,27 @@ body {
   width: 100%;
 }
 
+/*
+ * Mobile form controls must render at 16px or larger to prevent Safari from
+ * zooming the page when a control receives focus. Keep this scoped to phones
+ * so the existing desktop and tablet sizing remains unchanged. This does not
+ * disable pinch-to-zoom or otherwise interfere with native focus/keyboard
+ * behavior.
+ */
+@media (max-width: 767px) {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-padding-block: 1rem;
+  }
+
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='button']):not([type='submit']):not([type='reset']):not([type='image']),
+  textarea,
+  select {
+    font-size: 16px !important;
+    scroll-margin-block: 1rem;
+  }
+}
+
 #root {
   overflow-x: hidden;
   max-width: 100vw;

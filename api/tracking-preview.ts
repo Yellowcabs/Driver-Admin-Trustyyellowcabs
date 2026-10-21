@@ -10,17 +10,19 @@ type PreviewResponse = {
   send: (body: string) => void;
 };
 
-const title = 'Trusty Yellow Cabs – Live Trip Tracking';
-const description = 'Track your ride live with Trusty Yellow Cabs.';
-
 function replaceOrInsertMeta(html: string, property: string, tag: string): string {
   const pattern = new RegExp(`<meta\\s+property=["']${property.replace(':', '\\:')}["'][^>]*>`, 'i');
   if (pattern.test(html)) return html.replace(pattern, tag);
   return html.replace('</head>', `    ${tag}\n  </head>`);
 }
 
+function removeMeta(html: string, attribute: 'name' | 'property', value: string): string {
+  const pattern = new RegExp(`<meta\\s+[^>]*${attribute}=["']${value.replace(':', '\\:')}["'][^>]*>\\s*`, 'gi');
+  return html.replace(pattern, '');
+}
+
 export default async function handler(req: PreviewRequest, res: PreviewResponse) {
-  const requestHost = req.headers?.['x-forwarded-host'] || req.headers?.host || 'trusty-admin.vercel.app';
+  const requestHost = req.headers?.['x-forwarded-host'] || req.headers?.host || 'https://admin.trustyyellowcabs.in';
   const host = Array.isArray(requestHost) ? requestHost[0] : requestHost;
   const origin = `https://${host}`;
   const trackQuery = req.query?.track;
@@ -36,9 +38,13 @@ export default async function handler(req: PreviewRequest, res: PreviewResponse)
     if (!shellResponse.ok) throw new Error(`App shell request failed: ${shellResponse.status}`);
 
     let html = await shellResponse.text();
-    html = html.replace(/<title>[^<]*<\/title>/i, `<title>${title}</title>`);
-    html = replaceOrInsertMeta(html, 'og:title', `<meta property="og:title" content="${title}" />`);
-    html = replaceOrInsertMeta(html, 'og:description', `<meta property="og:description" content="${description}" />`);
+    html = html.replace(/<title>[^<]*<\/title>/i, '');
+    html = removeMeta(html, 'name', 'description');
+    html = removeMeta(html, 'property', 'og:title');
+    html = removeMeta(html, 'property', 'og:description');
+    html = removeMeta(html, 'name', 'twitter:title');
+    html = removeMeta(html, 'name', 'twitter:description');
+    html = removeMeta(html, 'name', 'twitter:card');
     html = replaceOrInsertMeta(html, 'og:image', `<meta property="og:image" content="${imageUrl}" />`);
     html = replaceOrInsertMeta(html, 'og:image:secure_url', `<meta property="og:image:secure_url" content="${imageUrl}" />`);
     html = replaceOrInsertMeta(html, 'og:image:type', '<meta property="og:image:type" content="image/jpeg" />');

@@ -343,7 +343,7 @@ export function useCabData() {
       const tripId = tripInput.trip_id
         ? tripInput.trip_id.toString().replace(/^TRIP-?/i, '').trim()
         : `${Math.floor(1000 + Math.random() * 9000)}`;
-      const docId = `trip_doc_${Date.now()}`;
+      const docId = tripInput.doc_id || `trip_doc_${Date.now()}`;
 
       // OTP is optional: If provided and non-empty, use it; otherwise null
       const otp = tripInput.otp && String(tripInput.otp).trim() ? String(tripInput.otp).trim() : null;
@@ -426,7 +426,11 @@ export function useCabData() {
         }
       }
 
-      setTrips((prev) => [newTrip, ...prev]);
+      setTrips((prev) => {
+        const existingIndex = prev.findIndex((trip) => trip.doc_id === newTrip.doc_id);
+        if (existingIndex === -1) return [newTrip, ...prev];
+        return prev.map((trip, index) => (index === existingIndex ? newTrip : trip));
+      });
       if (newTrip.driver_id) {
         setDrivers((prev) =>
           prev.map((d) => (d.driver_id === newTrip.driver_id ? { ...d, current_trip_id: newTrip.trip_id } : d))
@@ -583,7 +587,17 @@ export function useCabData() {
         tracking_enabled: false,
       };
       if (isFirebaseConnected) {
-        await transitionTripAtomically(firebaseConfig, updated, ['OPEN', 'ACCEPTED', 'IN_PROGRESS'], assignedDriver);
+        // Keep cancellation scoped to the trip and driver records. The optional
+        // tracking-session cleanup is separately protected in some deployments;
+        // including it here would make an otherwise authorized cancellation fail.
+        await transitionTripAtomically(
+          firebaseConfig,
+          updated,
+          ['OPEN', 'ACCEPTED', 'IN_PROGRESS'],
+          assignedDriver,
+          false,
+          false
+        );
       }
       setTrips((prev) => prev.map((t) =>
         t.doc_id === tripDocId || t.trip_id === tripDocId ? updated : t

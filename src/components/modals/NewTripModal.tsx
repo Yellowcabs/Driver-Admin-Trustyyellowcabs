@@ -131,6 +131,8 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
   const [notes, setNotes] = useState('');
   const [sendSmsNotification, setSendSmsNotification] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitInFlightRef = useRef(false);
+  const submissionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (Number(radiusKms) > 10) {
@@ -526,13 +528,19 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setIsSubmitting(true);
+
+    const submissionId = submissionIdRef.current || `trip_doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    submissionIdRef.current = submissionId;
 
     const selectedDriver = drivers.find((d) => d.driver_id === assignedDriverId);
     const isPkg = tripType === 'PACKAGE';
 
     try {
       await onSubmit({
+        doc_id: submissionId,
         customer_name: customerName.trim() || 'Passenger',
         customer_phone: customerPhone.trim() || '',
         trip_type: tripType,
@@ -567,11 +575,13 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
         localStorage.removeItem(NEW_TRIP_DRAFT_KEY);
       } catch {}
       resetForm();
+      submissionIdRef.current = null;
       onClose();
     } catch (err: any) {
       setErrorMessage(err.message || 'Error dispatching trip');
     } finally {
       setIsSubmitting(false);
+      submitInFlightRef.current = false;
     }
   };
 

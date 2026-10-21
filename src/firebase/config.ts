@@ -1000,7 +1000,8 @@ export async function transitionTripAtomically(
   trip: FirestoreTrip,
   expectedStatuses: string[],
   driver?: FirestoreDriver | null,
-  incrementDriverTrips: boolean = false
+  incrementDriverTrips: boolean = false,
+  deactivateTrackingSession: boolean = true
 ): Promise<void> {
   const { db } = getOrCreateFirebaseInstance(config);
   if (!db || !trip.doc_id) throw new Error('Trip database record is unavailable.');
@@ -1047,6 +1048,7 @@ export async function transitionTripAtomically(
       transaction.update(driverRef, driverUpdates);
     }
     if (
+      deactivateTrackingSession &&
       trip.tracking_token &&
       (trip.status === 'COMPLETED' || trip.status === 'CANCELLED')
     ) {

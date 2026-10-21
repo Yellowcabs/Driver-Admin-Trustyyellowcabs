@@ -210,10 +210,14 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
       const pickupLng = currentTrip?.pickup_lng ?? 76.9558;
       const center = { lat: pickupLat, lng: pickupLng };
 
-      const driverHasValidLocation = Number.isFinite(driver?.latitude) && Number.isFinite(driver?.longitude);
-      const driverPos = driverHasValidLocation
-        ? { lat: driver.latitude as number, lng: driver.longitude as number }
-        : null;
+      const driverPos =
+        driver &&
+        typeof driver.latitude === 'number' &&
+        Number.isFinite(driver.latitude) &&
+        typeof driver.longitude === 'number' &&
+        Number.isFinite(driver.longitude)
+          ? { lat: driver.latitude, lng: driver.longitude }
+          : null;
 
       // Pure 3D White Car ONLY (no top small icon, no floating badge)
       const carIconDataUrl = getCarIconDataUrl({

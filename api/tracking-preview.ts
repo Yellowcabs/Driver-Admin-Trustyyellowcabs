@@ -22,7 +22,7 @@ function removeMeta(html: string, attribute: 'name' | 'property', value: string)
 }
 
 export default async function handler(req: PreviewRequest, res: PreviewResponse) {
-  const requestHost = req.headers?.['x-forwarded-host'] || req.headers?.host || 'https://admin.trustyyellowcabs.in';
+  const requestHost = req.headers?.['x-forwarded-host'] || req.headers?.host || 'admin.trustyyellowcabs.in';
   const host = Array.isArray(requestHost) ? requestHost[0] : requestHost;
   const origin = `https://${host}`;
   const trackQuery = req.query?.track;

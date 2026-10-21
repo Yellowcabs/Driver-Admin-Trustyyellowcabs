@@ -214,7 +214,7 @@ export function useCabData() {
         const unsubDrivers = subscribeToFirestoreDrivers(
           firebaseConfig,
           (remoteDrivers) => {
-            if (remoteDrivers && remoteDrivers.length > 0) {
+            if (remoteDrivers) {
               setDrivers(remoteDrivers);
               addLog('INFO', 'FIRESTORE', 'Drivers Synced', `Received ${remoteDrivers.length} drivers from Firestore.`);
             }
@@ -229,7 +229,7 @@ export function useCabData() {
         const unsubTrips = subscribeToFirestoreTrips(
           firebaseConfig,
           (remoteTrips) => {
-            if (remoteTrips && remoteTrips.length > 0) {
+            if (remoteTrips) {
               setTrips(remoteTrips);
               addLog('INFO', 'FIRESTORE', 'Trips Synced', `Received ${remoteTrips.length} trips from Firestore.`);
             }

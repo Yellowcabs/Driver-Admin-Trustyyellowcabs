@@ -7,6 +7,16 @@
   "trailingSlash": false,
   "rewrites": [
     {
+      "source": "/",
+      "has": [
+        {
+          "type": "query",
+          "key": "track"
+        }
+      ],
+      "destination": "/api/tracking-preview"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   FirestoreTrip,
   FirestoreDriver,
@@ -113,6 +113,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
   const [tripToCancel, setTripToCancel] = useState<FirestoreTrip | null>(null);
   const [cancelReasonInput, setCancelReasonInput] = useState<string>('');
   const [isProcessingAction, setIsProcessingAction] = useState<boolean>(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Active operations on Dashboard (Exclude COMPLETED and CANCELLED / closed trips) - Memoized for Admin Panel Optimization
   const activeTrips = useMemo(
@@ -180,6 +181,11 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
 
   // Pagination calculation
   const totalPages = Math.ceil(filteredTrips.length / ITEMS_PER_PAGE) || 1;
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
+
   const paginatedTrips = useMemo(
     () => filteredTrips.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE),
     [filteredTrips, currentPage]
@@ -207,6 +213,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
   };
 
   const handleCancelClick = (trip: FirestoreTrip) => {
+    setActionError(null);
     setCancelReasonInput(
       trip.status === 'ACCEPTED'
         ? 'Customer cancelled after driver acceptance'
@@ -216,10 +223,12 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
   };
 
   const handleUnassignClick = (trip: FirestoreTrip) => {
+    setActionError(null);
     setTripToUnassign(trip);
   };
 
   const handleDeleteClick = (trip: FirestoreTrip) => {
+    setActionError(null);
     setTripToDelete(trip);
   };
 
@@ -1079,7 +1088,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                             <span>Edit</span>
                           </button>
                           <button
-                            onClick={() => setTripToCancel(trip)}
+                            onClick={() => handleCancelClick(trip)}
                             className="bg-white hover:bg-rose-50 text-rose-700 font-bold text-xs px-3 py-2.5 rounded-lg border border-rose-200 transition flex items-center justify-center cursor-pointer min-h-[44px]"
                             title="Cancel Trip"
                           >
@@ -1113,7 +1122,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                           <span>Edit</span>
                         </button>
                         <button
-                          onClick={() => setTripToCancel(trip)}
+                          onClick={() => handleCancelClick(trip)}
                           className="bg-white hover:bg-rose-50 text-rose-700 font-bold text-xs px-3 py-2.5 rounded-lg border border-rose-200 transition flex items-center justify-center cursor-pointer min-h-[44px]"
                           title="Cancel Trip"
                         >
@@ -1132,7 +1141,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                           <span>Edit</span>
                         </button>
                         <button
-                          onClick={() => setTripToCancel(trip)}
+                          onClick={() => handleCancelClick(trip)}
                           className="bg-white hover:bg-rose-50 text-rose-700 font-bold text-xs px-3 py-2.5 rounded-lg border border-rose-200 transition flex items-center justify-center cursor-pointer min-h-[44px]"
                           title="Cancel Trip"
                         >
@@ -1319,7 +1328,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                           )}
                           {(trip.status === 'OPEN' || trip.status === 'ACCEPTED' || trip.status === 'IN_PROGRESS') && (
                             <button
-                              onClick={() => setTripToCancel(trip)}
+                              onClick={() => handleCancelClick(trip)}
                               className="px-2.5 py-1.5 rounded-lg text-rose-600 hover:text-rose-700 hover:bg-rose-50 cursor-pointer text-xs font-bold"
                               title="Cancel Trip"
                             >
@@ -1401,12 +1410,14 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                 disabled={isProcessingAction}
                 onClick={async () => {
                   setIsProcessingAction(true);
+                  setActionError(null);
                   try {
                     const idToDelete = tripToDelete.doc_id || tripToDelete.trip_id;
                     await onDeleteTrip(idToDelete);
                     setTripToDelete(null);
                   } catch (err) {
                     console.error('Failed to delete trip:', err);
+                    setActionError(err instanceof Error ? err.message : 'Failed to delete trip.');
                   } finally {
                     setIsProcessingAction(false);
                   }
@@ -1417,6 +1428,11 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                 <span>{isProcessingAction ? 'Deleting...' : 'Delete Trip'}</span>
               </button>
             </div>
+            {actionError && (
+              <p className="mt-3 text-xs font-semibold text-rose-600" role="alert">
+                {actionError}
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -1444,12 +1460,14 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                 disabled={isProcessingAction}
                 onClick={async () => {
                   setIsProcessingAction(true);
+                  setActionError(null);
                   try {
                     const idToUnassign = tripToUnassign.doc_id || tripToUnassign.trip_id;
                     await onUnassignDriver(idToUnassign, '');
                     setTripToUnassign(null);
                   } catch (err) {
                     console.error('Failed to unassign driver:', err);
+                    setActionError(err instanceof Error ? err.message : 'Failed to unassign driver.');
                   } finally {
                     setIsProcessingAction(false);
                   }
@@ -1459,6 +1477,11 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                 <span>{isProcessingAction ? 'Unassigning...' : 'Unassign Driver'}</span>
               </button>
             </div>
+            {actionError && (
+              <p className="mt-3 text-xs font-semibold text-rose-600" role="alert">
+                {actionError}
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -1502,12 +1525,14 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                 disabled={isProcessingAction}
                 onClick={async () => {
                   setIsProcessingAction(true);
+                  setActionError(null);
                   try {
                     const idToCancel = tripToCancel.doc_id || tripToCancel.trip_id;
                     await onCancelTrip(idToCancel, cancelReasonInput || 'Cancelled by Admin');
                     setTripToCancel(null);
                   } catch (err) {
                     console.error('Failed to cancel trip:', err);
+                    setActionError(err instanceof Error ? err.message : 'Failed to cancel trip.');
                   } finally {
                     setIsProcessingAction(false);
                   }
@@ -1518,6 +1543,11 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                 <span>{isProcessingAction ? 'Cancelling...' : 'Confirm Cancellation'}</span>
               </button>
             </div>
+            {actionError && (
+              <p className="mt-3 text-xs font-semibold text-rose-600" role="alert">
+                {actionError}
+              </p>
+            )}
           </div>
         </div>
       )}

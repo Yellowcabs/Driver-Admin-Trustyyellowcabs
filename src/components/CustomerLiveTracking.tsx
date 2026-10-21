@@ -627,7 +627,7 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
   }
 
   return (
-    <div className="relative flex min-h-[100svh] min-h-[100dvh] w-full flex-col overflow-x-hidden overflow-y-auto bg-[#FFF8F8] pb-[env(safe-area-inset-bottom)] font-sans text-[#111827] select-none sm:min-h-screen sm:overflow-y-visible sm:pb-0">
+    <div className="relative flex min-h-0 w-full flex-col overflow-x-hidden overflow-y-auto bg-[#FFF8F8] font-sans text-[#111827] select-none sm:min-h-screen sm:overflow-y-visible">
       {/* 1. TOP BRANDED HEADER (Light Theme) */}
       <header className="relative z-30 flex items-center justify-between border-b border-[#F1DADA] bg-white px-4 py-3 sm:px-6">
         <div className="flex items-center gap-2">
@@ -707,7 +707,7 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
       </div>
 
       {/* 3. BOTTOM VEHICLE & TRIP DETAILS CARD */}
-      <div className="relative z-30 mx-auto w-full shrink-0 max-w-3xl space-y-4 border-t border-[#F1DADA] bg-white px-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-5 sm:px-6 sm:pb-6 min-[768px]:max-[1024px]:max-w-2xl min-[768px]:max-[1024px]:px-6 lg:max-w-4xl lg:px-8 lg:pb-8">
+      <div className="relative z-30 mx-auto w-full shrink-0 max-w-3xl space-y-4 border-t border-[#F1DADA] bg-white px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-5 sm:px-6 sm:pb-6 min-[768px]:max-[1024px]:max-w-2xl min-[768px]:max-[1024px]:px-6 lg:max-w-4xl lg:px-8 lg:pb-8">
         <div className="flex flex-col gap-3 border-b border-[#F1DADA] pb-4">
           <div className="!block min-w-0">
             <div className="flex flex-wrap items-center gap-2">

@@ -78,9 +78,9 @@ export default defineConfig(({ mode }) => {
         manifest: {
           id: '/',
           name: 'Trusty Yellow Cab Admin',
-          short_name: 'CabAdmin',
+          short_name: 'Trusty Admin',
           description: 'PWA dispatch & fleet admin console for Trusty Yellow Cab',
-          theme_color: '#F59E0B',
+          theme_color: '#ffffff',
           background_color: '#F8FAFC',
           display: 'standalone',
           start_url: '/',

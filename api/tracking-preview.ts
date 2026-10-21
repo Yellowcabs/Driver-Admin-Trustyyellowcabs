@@ -21,6 +21,8 @@ function removeMeta(html: string, attribute: 'name' | 'property', value: string)
   return html.replace(pattern, '');
 }
 
+const trackingImageVersion = '2';
+
 export default async function handler(req: PreviewRequest, res: PreviewResponse) {
   const requestHost = req.headers?.['x-forwarded-host'] || req.headers?.host || 'admin.trustyyellowcabs.in';
   const host = Array.isArray(requestHost) ? requestHost[0] : requestHost;
@@ -29,7 +31,7 @@ export default async function handler(req: PreviewRequest, res: PreviewResponse)
   const trackToken = Array.isArray(trackQuery) ? trackQuery[0] : trackQuery;
   const publicUrl = new URL('/', origin);
   publicUrl.searchParams.set('track', trackToken || '');
-  const imageUrl = `${origin}/tracking-share.jpg`;
+  const imageUrl = `${origin}/tracking-share.jpg?v=${trackingImageVersion}`;
 
   try {
     // Reuse the production app shell so the browser still receives the normal
@@ -45,6 +47,7 @@ export default async function handler(req: PreviewRequest, res: PreviewResponse)
     html = removeMeta(html, 'name', 'twitter:title');
     html = removeMeta(html, 'name', 'twitter:description');
     html = removeMeta(html, 'name', 'twitter:card');
+    html = removeMeta(html, 'name', 'twitter:image');
     html = replaceOrInsertMeta(html, 'og:image', `<meta property="og:image" content="${imageUrl}" />`);
     html = replaceOrInsertMeta(html, 'og:image:secure_url', `<meta property="og:image:secure_url" content="${imageUrl}" />`);
     html = replaceOrInsertMeta(html, 'og:image:type', '<meta property="og:image:type" content="image/jpeg" />');

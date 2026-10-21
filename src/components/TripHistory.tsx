@@ -1,33 +1,19 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { FirestoreTrip, FirestoreDriver, TripStatus } from '../types';
 import {
-  History,
-  Search,
   Download,
-  Filter,
   MapPin,
-  Calendar,
-  IndianRupee,
   User,
   Car,
-  Clock,
   CheckCircle2,
-  XCircle,
   KeyRound,
   Trash2,
   Zap,
-  Radio,
   Eye,
   TrendingUp,
   Printer,
-  ChevronRight,
-  ChevronLeft,
-  Database,
-  LayoutGrid,
-  Table as TableIcon,
   RotateCcw,
   CalendarRange,
-  Phone,
   ArrowRight,
   Check,
   FileSpreadsheet,
@@ -47,6 +33,7 @@ interface TripHistoryProps {
   onDeleteTrip: (tripDocId: string) => Promise<void>;
   globalSearchQuery: string;
   onOpenTrackingModal?: (trip: FirestoreTrip) => void;
+  onOpenEditTrip?: (trip: FirestoreTrip) => void;
   onSetDriverOfficeDue?: (
     driverId: string,
     amount: number,
@@ -77,6 +64,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
   onDeleteTrip,
   globalSearchQuery,
   onOpenTrackingModal,
+  onOpenEditTrip,
   onSetDriverOfficeDue,
   onClearDriverOfficeDue,
   onClearLocalTripStorage,
@@ -89,13 +77,12 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
 
   // Clear Local Storage states (Only removes browser cache - ZERO backend deletions)
   const [isClearStorageModalOpen, setIsClearStorageModalOpen] = useState<boolean>(false);
-  const [isLocalStorageManuallyCleared, setIsLocalStorageManuallyCleared] = useState<boolean>(false);
   const [storageCleanNotification, setStorageCleanNotification] = useState<string | null>(null);
 
   // Driver Office Due Management state (links trip to its assigned driver only)
   const [feeTrip, setFeeTrip] = useState<FirestoreTrip | null>(null);
   const [feeStep, setFeeStep] = useState<1 | 2 | 3>(1);
-  const [feeAmount, setFeeAmount] = useState<string>('50');
+  const [feeAmount, setFeeAmount] = useState<string>('');
   const [feeNotePreset, setFeeNotePreset] = useState<string>('Trip CC (Convenience Charge)');
   const [customFeeNote, setCustomFeeNote] = useState<string>('');
   // Office UPI ID is blank always by default; populated only if user chooses default ID
@@ -104,33 +91,15 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
   const [feeFeedback, setFeeFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   
   // Date Filtering State: Day, Week, Month, Custom Date Range
-  const [dateFilter, setDateFilter] = useState<DateFilterPreset>('ALL');
+  const [dateFilter, setDateFilter] = useState<DateFilterPreset>('TODAY');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
+  const [appliedCustomStartDate, setAppliedCustomStartDate] = useState<string>('');
+  const [appliedCustomEndDate, setAppliedCustomEndDate] = useState<string>('');
   
-  // View mode and pagination
-  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
+  // Grid-only view and pagination
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const [localStorageCount, setLocalStorageCount] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-      return saved ? JSON.parse(saved).length : trips.length;
-    } catch {
-      return trips.length;
-    }
-  });
-
-  // Ensure trips are kept updated in LocalStorage (unless manually cleared by user)
-  useEffect(() => {
-    if (trips.length > 0 && !isLocalStorageManuallyCleared) {
-      try {
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(trips));
-        setLocalStorageCount(trips.length);
-      } catch (err) {
-        console.warn('Trip localStorage sync warning:', err);
-      }
-    }
-  }, [trips, isLocalStorageManuallyCleared]);
+  const [localStorageCount, setLocalStorageCount] = useState<number>(0);
 
   const handleConfirmClearLocalStorage = (clearViewToo: boolean) => {
     try {
@@ -139,7 +108,6 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
     } catch (err) {
       console.warn('Could not remove trips from localStorage', err);
     }
-    setIsLocalStorageManuallyCleared(true);
     setLocalStorageCount(0);
     onClearLocalTripStorage?.(clearViewToo);
     setIsClearStorageModalOpen(false);
@@ -208,13 +176,15 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
     }
 
     if (dateFilter === 'CUSTOM') {
-      if (customStartDate) {
-        const start = new Date(customStartDate);
+      if (!appliedCustomStartDate || !appliedCustomEndDate) return true;
+
+      if (appliedCustomStartDate) {
+        const start = new Date(appliedCustomStartDate);
         start.setHours(0, 0, 0, 0);
         if (tripTime < start.getTime()) return false;
       }
-      if (customEndDate) {
-        const end = new Date(customEndDate);
+      if (appliedCustomEndDate) {
+        const end = new Date(appliedCustomEndDate);
         end.setHours(23, 59, 59, 999);
         if (tripTime > end.getTime()) return false;
       }
@@ -251,18 +221,78 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
       }
       return true;
     });
-  }, [trips, selectedStatus, dateFilter, customStartDate, customEndDate, searchQuery, globalSearchQuery]);
+  }, [
+    trips,
+    selectedStatus,
+    dateFilter,
+    appliedCustomStartDate,
+    appliedCustomEndDate,
+    searchQuery,
+    globalSearchQuery,
+  ]);
+
+  const customDateError = useMemo(() => {
+    if (dateFilter !== 'CUSTOM' || (!customStartDate && !customEndDate)) return null;
+    if (!customStartDate || !customEndDate) return 'Select both dates to apply the custom range.';
+
+    const start = new Date(`${customStartDate}T00:00:00`);
+    const end = new Date(`${customEndDate}T00:00:00`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+      return 'Choose a valid date range.';
+    }
+    return null;
+  }, [dateFilter, customStartDate, customEndDate]);
+
+  const isCustomDateReady =
+    dateFilter !== 'CUSTOM' ||
+    (Boolean(customStartDate) && Boolean(customEndDate) && !customDateError);
+  const visibleFilteredTrips = isCustomDateReady ? filteredTrips : [];
 
   // Pagination calculation
-  const totalPages = Math.ceil(filteredTrips.length / TRIPS_PER_PAGE) || 1;
+  const totalPages = Math.ceil(visibleFilteredTrips.length / TRIPS_PER_PAGE) || 1;
   const paginatedTrips = useMemo(() => {
     const page = Math.min(currentPage, totalPages);
-    return filteredTrips.slice((page - 1) * TRIPS_PER_PAGE, page * TRIPS_PER_PAGE);
-  }, [filteredTrips, currentPage, totalPages]);
+    return visibleFilteredTrips.slice((page - 1) * TRIPS_PER_PAGE, page * TRIPS_PER_PAGE);
+  }, [visibleFilteredTrips, currentPage, totalPages]);
 
   // Reset page on filters change
   const handleDatePresetChange = (preset: DateFilterPreset) => {
     setDateFilter(preset);
+    if (preset !== 'CUSTOM') {
+      setAppliedCustomStartDate('');
+      setAppliedCustomEndDate('');
+    } else if (!customDateError && customStartDate && customEndDate) {
+      setAppliedCustomStartDate(customStartDate);
+      setAppliedCustomEndDate(customEndDate);
+    } else {
+      setCustomStartDate('');
+      setCustomEndDate('');
+      setAppliedCustomStartDate('');
+      setAppliedCustomEndDate('');
+    }
+    setCurrentPage(1);
+  };
+
+  const handleCustomDateChange = (field: 'start' | 'end', value: string) => {
+    const nextStart = field === 'start' ? value : customStartDate;
+    const nextEnd = field === 'end' ? value : customEndDate;
+    setCustomStartDate(nextStart);
+    setCustomEndDate(nextEnd);
+    setCurrentPage(1);
+
+    const start = new Date(`${nextStart}T00:00:00`);
+    const end = new Date(`${nextEnd}T00:00:00`);
+    if (nextStart && nextEnd && !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && start <= end) {
+      setAppliedCustomStartDate(nextStart);
+      setAppliedCustomEndDate(nextEnd);
+    }
+  };
+
+  const clearCustomDateRange = () => {
+    setCustomStartDate('');
+    setCustomEndDate('');
+    setAppliedCustomStartDate('');
+    setAppliedCustomEndDate('');
     setCurrentPage(1);
   };
 
@@ -291,7 +321,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
     setFeeFeedback(null);
     const drv = getDriverForTrip(t);
     if (drv) {
-      setFeeAmount(drv.payment_amount && drv.payment_amount > 0 ? String(drv.payment_amount) : '50');
+      setFeeAmount('');
       // Office UPI ID is set blank always by default; user can choose default ID if desired
       setFeeOfficeUpi('');
       if (drv.payment_note) {
@@ -307,7 +337,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
         setCustomFeeNote('');
       }
     } else {
-      setFeeAmount('50');
+      setFeeAmount('');
       setFeeOfficeUpi('');
       setFeeNotePreset('Trip CC (Convenience Charge)');
       setCustomFeeNote('');
@@ -379,6 +409,13 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
 
   // Export to CSV
   const exportToCSV = () => {
+    const csvCell = (value: unknown): string => {
+      let text = String(value ?? '');
+      // Spreadsheet applications evaluate these prefixes as formulas. Prefixing
+      // with an apostrophe forces imported customer data to remain plain text.
+      if (/^[\s]*[=+\-@]/.test(text)) text = `'${text}`;
+      return `"${text.replace(/"/g, '""')}"`;
+    };
     const headers = [
       'Trip ID',
       'Status',
@@ -399,30 +436,32 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
     ];
 
     const rows = filteredTrips.map((t) => [
-      `"${t.trip_id.replace(/^TRIP-?/, '')}"`,
-      `"${t.status}"`,
-      `"${new Date(t.created_at).toLocaleString()}"`,
-      `"${t.customer_name}"`,
-      `"${t.customer_phone}"`,
-      `"${t.pickup_location.replace(/"/g, '""')}"`,
-      `"${t.drop_location.replace(/"/g, '""')}"`,
-      `"${t.driver_name || 'Unassigned'}"`,
-      `"${t.driver_id || ''}"`,
-      `"${t.vehicle_number || ''}"`,
-      `"${t.vehicle_category || ''}"`,
+      t.trip_id.replace(/^TRIP-?/, ''),
+      t.status,
+      new Date(t.created_at).toLocaleString(),
+      t.customer_name,
+      t.customer_phone,
+      t.pickup_location,
+      t.drop_location,
+      t.driver_name || 'Unassigned',
+      t.driver_id || '',
+      t.vehicle_number || '',
+      t.vehicle_category || '',
       t.estimated_fare || 0,
       t.final_fare || t.estimated_fare || 0,
       t.distance_km || 0,
-      `"${t.otp || ''}"`,
-      `"${t.completed_at ? new Date(t.completed_at).toLocaleString() : 'N/A'}"`,
+      t.otp || '',
+      t.completed_at ? new Date(t.completed_at).toLocaleString() : 'N/A',
     ]);
 
-    const csvContent =
-      'data:text/csv;charset=utf-8,' +
-      [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = [headers, ...rows]
+      .map((row) => row.map(csvCell).join(','))
+      .join('\r\n');
+    const downloadUrl = URL.createObjectURL(
+      new Blob([`\uFEFF${csvContent}`], { type: 'text/csv;charset=utf-8' })
+    );
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.setAttribute('href', downloadUrl);
     const dateLabel =
       dateFilter === 'TODAY'
         ? 'Today'
@@ -438,47 +477,27 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(downloadUrl);
   };
 
   const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'COMPLETED':
-        return (
-          <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200">
-            <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> COMPLETED
-          </span>
-        );
-      case 'IN_PROGRESS':
-        return (
-          <span className="inline-flex items-center gap-1 bg-purple-50 text-purple-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-purple-200">
-            <Clock className="w-2.5 h-2.5 text-purple-600 animate-spin" /> ON RIDE
-          </span>
-        );
-      case 'ACCEPTED':
-        return (
-          <span className="inline-flex items-center gap-1 bg-sky-50 text-sky-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-sky-200">
-            ACCEPTED
-          </span>
-        );
-      case 'OPEN':
-        return (
-          <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-300">
-            OPEN
-          </span>
-        );
-      case 'CANCELLED':
-        return (
-          <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-200">
-            <XCircle className="w-2.5 h-2.5 text-slate-400" /> CANCELLED
-          </span>
-        );
-      default:
-        return null;
-    }
+    const label = status === 'IN_PROGRESS' ? 'ON RIDE' : status.replace('_', ' ');
+    const color =
+      status === 'COMPLETED'
+        ? 'text-emerald-700'
+        : status === 'CANCELLED'
+          ? 'text-rose-700'
+          : status === 'OPEN'
+            ? 'text-amber-800'
+            : status === 'ACCEPTED'
+              ? 'text-sky-700'
+              : 'text-purple-700';
+
+    return <span className={`text-[10px] font-semibold tracking-wide ${color}`}>{label}</span>;
   };
 
   return (
-    <div className="space-y-4 sm:space-y-6">
+    <div className="min-w-0 space-y-3 pb-20 sm:space-y-4 sm:pb-0 min-[768px]:max-[1024px]:space-y-4 lg:space-y-5">
       {/* Toast Notification when Local Storage is Cleaned */}
       {storageCleanNotification && (
         <div className="bg-emerald-50 border border-emerald-200/90 text-emerald-950 px-4 py-3 rounded-2xl flex items-center justify-between text-xs font-semibold shadow-xs transition animate-in fade-in duration-200">
@@ -497,227 +516,124 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
         </div>
       )}
 
-      {/* Top Header Banner with LocalStorage Persistence Indicator & View Toggle */}
-      <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold shadow-xs shrink-0">
-            <History className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
-                Trip Management &amp; Ledger
-              </h2>
-              {localStorageCount > 0 ? (
-                <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200">
-                  <Database className="w-2.5 h-2.5 text-emerald-600" /> Local Storage Active ({localStorageCount} stored)
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-200">
-                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Local Storage Clean (0 stored)
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Comprehensive operational trip ledger with date-wise search, live route tracking, and operations auditing.
-            </p>
-          </div>
-        </div>
+      {/* Compact Trip History header */}
+      <div className="hidden flex-col gap-3 border-b border-slate-200 pb-4 sm:flex sm:flex-row sm:items-center sm:justify-between">
+        <h2 className="text-lg font-bold tracking-tight text-slate-950">Trip History</h2>
 
-        {/* View Mode Switcher and Quick Actions */}
-        <div className="flex items-center gap-2 self-stretch md:self-auto justify-between md:justify-end flex-wrap sm:flex-nowrap">
-          <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
-            <button
-              onClick={() => setViewMode('table')}
-              className={`p-1.5 px-2.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                viewMode === 'table'
-                  ? 'bg-white text-slate-900 shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-              title="Table View"
-            >
-              <TableIcon className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Table</span>
-            </button>
-            <button
-              onClick={() => setViewMode('cards')}
-              className={`p-1.5 px-2.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                viewMode === 'cards'
-                  ? 'bg-white text-slate-900 shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-              title="Card Grid View"
-            >
-              <LayoutGrid className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Cards</span>
-            </button>
-          </div>
-
+        {/* Quick Actions */}
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
           {/* Clear Local Storage Button (Only affects browser local cache, NOT backend) */}
           <button
             type="button"
             onClick={() => setIsClearStorageModalOpen(true)}
-            className="flex items-center gap-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200/90 font-bold px-3.5 py-2 rounded-xl text-xs shadow-2xs transition cursor-pointer shrink-0 min-h-[38px]"
+            className="min-h-10 flex-1 rounded-xl border border-rose-200/90 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100 sm:flex-none"
             title="Clean local browser storage for trips (Backend database remains untouched)"
           >
-            <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-            <span>Clear Local Storage</span>
+            <span>Clean</span>
           </button>
 
           <button
             onClick={exportToCSV}
-            className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold px-3.5 py-2 rounded-xl text-xs shadow-2xs transition cursor-pointer shrink-0 min-h-[38px]"
+            className="min-h-10 flex-1 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800 sm:flex-none"
             title="Export filtered records to CSV"
           >
-            <Download className="w-3.5 h-3.5 text-amber-400" />
-            <span>Export CSV</span>
+            <span>Export</span>
           </button>
         </div>
       </div>
 
       {/* KPI Overview Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4 w-full min-w-0">
+      <div className="grid w-full min-w-0 grid-cols-2 gap-2.5 sm:gap-3 min-[768px]:max-[1024px]:grid-cols-4 lg:grid-cols-4">
         {/* Total Ledger Fares */}
-        <div className="min-w-0 bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200/80 shadow-2xs">
-          <div className="flex items-center justify-between gap-1.5 sm:gap-2">
-            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
-              Settled Revenue
+        <div className="flex min-h-24 min-w-0 flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 sm:min-h-28 sm:p-4">
+          <div className="flex min-w-0 items-center justify-between gap-1.5 sm:gap-2">
+            <p className="min-w-0 whitespace-nowrap text-[10px] font-semibold uppercase leading-tight tracking-wider text-slate-500 sm:text-xs">
+              Revenue
             </p>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl bg-amber-400 text-slate-950 font-black flex items-center justify-center text-xs sm:text-sm shadow-2xs shrink-0">
-              ₹
-            </div>
           </div>
-          <div className="mt-2 sm:mt-3 flex items-baseline gap-1.5 sm:gap-2 flex-wrap min-w-0">
-            <span className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight tabular-nums truncate">
+          <div className="mt-2 w-full min-w-0 sm:mt-3">
+            <span className="block max-w-full whitespace-nowrap text-[clamp(0.875rem,4vw,1.5rem)] font-bold leading-none tracking-tight text-slate-950 tabular-nums min-[768px]:max-[1024px]:text-[clamp(0.875rem,2vw,1.125rem)] lg:text-[clamp(1.125rem,1.7vw,1.875rem)]">
               ₹{totalRevenue.toLocaleString()}
             </span>
-            <span className="text-[10px] text-emerald-600 font-bold">settled</span>
           </div>
         </div>
 
         {/* Completed Rides */}
-        <div className="min-w-0 bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200/80 shadow-2xs">
-          <div className="flex items-center justify-between gap-1.5 sm:gap-2">
-            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
-              Completed Rides
+        <div className="flex min-h-24 min-w-0 flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 sm:min-h-28 sm:p-4">
+          <div className="flex min-w-0 items-center justify-between gap-1.5 sm:gap-2">
+            <p className="min-w-0 whitespace-nowrap text-[10px] font-semibold uppercase leading-tight tracking-wider text-slate-500 sm:text-xs">
+              Completed
             </p>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center border border-emerald-200 shrink-0">
-              <CheckCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            </div>
           </div>
-          <div className="mt-2 sm:mt-3 flex items-baseline gap-1.5 sm:gap-2 flex-wrap min-w-0">
-            <span className="text-xl sm:text-2xl font-black text-emerald-600 tracking-tight tabular-nums truncate">
+          <div className="mt-2 w-full min-w-0 sm:mt-3">
+            <span className="block max-w-full whitespace-nowrap text-[clamp(0.875rem,4vw,1.5rem)] font-bold leading-none tracking-tight text-slate-950 tabular-nums min-[768px]:max-[1024px]:text-[clamp(0.875rem,2vw,1.125rem)] lg:text-[clamp(1.125rem,1.7vw,1.875rem)]">
               {completedTrips.length}
             </span>
-            <span className="text-[10px] text-slate-500 font-medium">completed</span>
           </div>
         </div>
 
         {/* Active Journeys */}
-        <div className="min-w-0 bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200/80 shadow-2xs">
-          <div className="flex items-center justify-between gap-1.5 sm:gap-2">
-            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
-              Active / On Ride
+        <div className="flex min-h-24 min-w-0 flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 sm:min-h-28 sm:p-4">
+          <div className="flex min-w-0 items-center justify-between gap-1.5 sm:gap-2">
+            <p className="min-w-0 whitespace-nowrap text-[10px] font-semibold uppercase leading-tight tracking-wider text-slate-500 sm:text-xs">
+              On Ride
             </p>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl bg-purple-50 text-purple-700 flex items-center justify-center border border-purple-200 shrink-0">
-              <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            </div>
           </div>
-          <div className="mt-2 sm:mt-3 flex items-baseline gap-1.5 sm:gap-2 flex-wrap min-w-0">
-            <span className="text-xl sm:text-2xl font-black text-purple-700 tracking-tight tabular-nums truncate">
+          <div className="mt-2 w-full min-w-0 sm:mt-3">
+            <span className="block max-w-full whitespace-nowrap text-[clamp(0.875rem,4vw,1.5rem)] font-bold leading-none tracking-tight text-slate-950 tabular-nums min-[768px]:max-[1024px]:text-[clamp(0.875rem,2vw,1.125rem)] lg:text-[clamp(1.125rem,1.7vw,1.875rem)]">
               {inProgressTrips.length}
             </span>
-            <span className="text-[10px] text-slate-500 font-medium">live journeys</span>
           </div>
         </div>
 
         {/* Average Ticket Size */}
-        <div className="min-w-0 bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200/80 shadow-2xs">
-          <div className="flex items-center justify-between gap-1.5 sm:gap-2">
-            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
-              Average Ticket
+        <div className="flex min-h-24 min-w-0 flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 sm:min-h-28 sm:p-4">
+          <div className="flex min-w-0 items-center justify-between gap-1.5 sm:gap-2">
+            <p className="min-w-0 whitespace-nowrap text-[10px] font-semibold uppercase leading-tight tracking-wider text-slate-500 sm:text-xs">
+              Average Fare
             </p>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl bg-sky-50 text-sky-700 flex items-center justify-center border border-sky-200 shrink-0">
-              <TrendingUp className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            </div>
           </div>
-          <div className="mt-2 sm:mt-3 flex items-baseline gap-1.5 sm:gap-2 flex-wrap min-w-0">
-            <span className="text-xl sm:text-2xl font-black text-sky-700 tracking-tight tabular-nums truncate">
+          <div className="mt-2 w-full min-w-0 sm:mt-3">
+            <span className="block max-w-full whitespace-nowrap text-[clamp(0.875rem,4vw,1.5rem)] font-bold leading-none tracking-tight text-slate-950 tabular-nums min-[768px]:max-[1024px]:text-[clamp(0.875rem,2vw,1.125rem)] lg:text-[clamp(1.125rem,1.7vw,1.875rem)]">
               ₹{avgFare}
             </span>
-            <span className="text-[10px] text-slate-500 font-medium">per ride</span>
           </div>
         </div>
       </div>
 
       {/* Modern Filter Toolbar: Date Wise Search (Day, Week, Month, Custom) + Status Tabs */}
-      <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3.5 sm:space-y-4">
+      <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
         {/* ===================== MOBILE DEDICATED LAYOUT (< sm) ===================== */}
         <div className="sm:hidden space-y-3">
-          {/* Top Quick Header: Live Indicator, View Mode & Export CSV */}
+          {/* Mobile view controls */}
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 min-w-0">
-              <span className="relative flex h-2.5 w-2.5 shrink-0">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
-              </span>
-              <span className="text-xs font-black text-slate-900 uppercase tracking-wider">
-                Ledger
-              </span>
-              <span className="text-xs font-bold text-slate-500 tabular-nums">
-                ({filteredTrips.length})
-              </span>
+              <span className="text-xs font-bold text-slate-900">Trips</span>
+              {isCustomDateReady && (
+                <span className="text-xs font-bold text-slate-500 tabular-nums">
+                  ({visibleFilteredTrips.length})
+                </span>
+              )}
             </div>
 
-            <div className="flex items-center gap-1.5 shrink-0">
-              {/* Table / Cards View Toggle */}
-              <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/80">
-                <button
-                  type="button"
-                  onClick={() => setViewMode('table')}
-                  className={`p-1.5 rounded-lg transition cursor-pointer ${
-                    viewMode === 'table'
-                      ? 'bg-white text-slate-950 shadow-2xs'
-                      : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                  title="Table View"
-                >
-                  <TableIcon className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('cards')}
-                  className={`p-1.5 rounded-lg transition cursor-pointer ${
-                    viewMode === 'cards'
-                      ? 'bg-white text-slate-950 shadow-2xs'
-                      : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                  title="Card View"
-                >
-                  <LayoutGrid className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
+            <div className="flex shrink-0 items-center gap-1">
               {/* Clear Local Storage & Export CSV Buttons */}
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => setIsClearStorageModalOpen(true)}
-                  className="bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-700 border border-rose-200/90 font-bold text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 shadow-2xs min-h-[38px] cursor-pointer select-none active:scale-95 transition"
+                  className="min-h-9 rounded-lg border border-rose-200/90 bg-rose-50 px-2 py-1 text-[11px] font-bold text-rose-700 transition hover:bg-rose-100"
                   title="Clear Local Storage (Backend safe)"
                 >
-                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                  <span className="hidden xs:inline">Clear Storage</span>
-                  <span className="xs:hidden">Clean</span>
+                  <span>Clean</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={exportToCSV}
-                  className="bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white font-bold text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 shadow-2xs min-h-[38px] cursor-pointer select-none active:scale-95 transition"
+                  className="min-h-9 rounded-lg bg-slate-900 px-2 py-1 text-[11px] font-bold text-white transition hover:bg-slate-800"
                   title="Export filtered records to CSV"
                 >
-                  <Download className="w-3.5 h-3.5 text-amber-400" />
                   <span>Export</span>
                 </button>
               </div>
@@ -726,16 +642,15 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
 
           {/* Full-width Touch-friendly Search Box */}
           <div className="relative">
-            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             <input
               type="text"
-              placeholder="Search trip ID, passenger, phone, cab..."
+              placeholder="Search trip, customer, phone or vehicle"
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full bg-slate-50 hover:bg-slate-100/60 focus:bg-white border border-slate-200/90 rounded-xl pl-10 pr-9 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500 min-h-[44px] transition-all font-medium"
+              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500 min-h-[44px] transition-all font-medium"
             />
             {searchQuery && (
               <button
@@ -756,13 +671,12 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
           <div className="space-y-1.5">
             <div className="flex items-center justify-between px-0.5">
               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                <Calendar className="w-3 h-3 text-amber-500" />
                 <span>Date Range</span>
               </span>
-              {dateFilter !== 'ALL' && (
+              {dateFilter !== 'TODAY' && (
                 <button
                   type="button"
-                  onClick={() => handleDatePresetChange('ALL')}
+                  onClick={() => handleDatePresetChange('TODAY')}
                   className="text-[11px] font-bold text-amber-600 hover:text-amber-800 cursor-pointer"
                 >
                   Reset Date
@@ -770,23 +684,22 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
               )}
             </div>
 
-            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 -mx-1 px-1">
+            <div className="flex flex-nowrap gap-1 py-0.5">
               {[
-                { id: 'ALL', label: 'All Time' },
-                { id: 'TODAY', label: 'Today (Day)' },
+                { id: 'TODAY', label: 'Today' },
                 { id: 'WEEK', label: 'This Week' },
                 { id: 'MONTH', label: 'This Month' },
-                { id: 'CUSTOM', label: 'Custom Range' },
+                { id: 'CUSTOM', label: 'Custom' },
               ].map((preset) => {
                 const isActive = dateFilter === preset.id;
                 return (
                   <button
                     key={preset.id}
                     onClick={() => handleDatePresetChange(preset.id as DateFilterPreset)}
-                    className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none shrink-0 min-h-[40px] active:scale-95 whitespace-nowrap ${
+                    className={`min-h-9 min-w-0 flex-1 rounded-lg px-1.5 py-1 text-[10px] font-bold transition-all cursor-pointer select-none whitespace-nowrap ${
                       isActive
-                        ? 'bg-slate-900 text-white shadow-xs'
-                        : 'bg-slate-100/90 text-slate-700 hover:bg-slate-200/80 border border-slate-200/60'
+                        ? 'border border-amber-400 bg-amber-400 text-slate-950'
+                        : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
                     }`}
                   >
                     {preset.label}
@@ -807,10 +720,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                   <input
                     type="date"
                     value={customStartDate}
-                    onChange={(e) => {
-                      setCustomStartDate(e.target.value);
-                      setCurrentPage(1);
-                    }}
+                    onChange={(e) => handleCustomDateChange('start', e.target.value)}
                     className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500 min-h-[38px]"
                   />
                 </div>
@@ -821,24 +731,21 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                   <input
                     type="date"
                     value={customEndDate}
-                    onChange={(e) => {
-                      setCustomEndDate(e.target.value);
-                      setCurrentPage(1);
-                    }}
+                    onChange={(e) => handleCustomDateChange('end', e.target.value)}
                     className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500 min-h-[38px]"
                   />
                 </div>
               </div>
 
+              {customDateError && (
+                <p className="text-[11px] font-medium text-amber-800">{customDateError}</p>
+              )}
+
               {(customStartDate || customEndDate) && (
                 <div className="flex justify-end pt-1">
                   <button
                     type="button"
-                    onClick={() => {
-                      setCustomStartDate('');
-                      setCustomEndDate('');
-                      setCurrentPage(1);
-                    }}
+                    onClick={clearCustomDateRange}
                     className="text-[11px] font-bold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 px-2.5 py-1 rounded-lg cursor-pointer transition active:scale-95"
                   >
                     Clear Dates
@@ -852,7 +759,6 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
           <div className="space-y-1.5">
             <div className="flex items-center justify-between px-0.5">
               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                <Filter className="w-3 h-3 text-amber-500" />
                 <span>Trip Status</span>
               </span>
               {selectedStatus !== 'ALL' && (
@@ -866,7 +772,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
               )}
             </div>
 
-            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 -mx-1 px-1">
+            <div className="grid grid-cols-3 gap-1.5 py-0.5">
               {[
                 { key: 'ALL', label: 'All Trips', dot: '' },
                 { key: 'COMPLETED', label: 'Completed', dot: 'bg-emerald-500' },
@@ -884,21 +790,14 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                   <button
                     key={st.key}
                     onClick={() => handleStatusFilterChange(st.key)}
-                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none shrink-0 min-h-[42px] active:scale-95 whitespace-nowrap ${
+                    className={`flex min-h-9 w-full items-center justify-center gap-1 rounded-lg px-1 py-1 text-[11px] font-semibold transition-all cursor-pointer select-none ${
                       isActive
-                        ? 'bg-amber-400 text-slate-950 shadow-xs'
-                        : 'bg-slate-100/90 text-slate-700 hover:bg-slate-200/80 border border-slate-200/60'
+                        ? 'border border-amber-400 bg-amber-400 text-slate-950'
+                        : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
                     }`}
                   >
-                    {st.dot && <span className={`w-1.5 h-1.5 rounded-full ${st.dot} shrink-0`}></span>}
                     <span>{st.label}</span>
-                    <span
-                      className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold tabular-nums whitespace-nowrap ${
-                        isActive
-                          ? 'bg-slate-950 text-white'
-                          : 'bg-slate-200 text-slate-700'
-                      }`}
-                    >
+                    <span className="text-[11px] font-medium tabular-nums whitespace-nowrap">
                       {count}
                     </span>
                   </button>
@@ -908,11 +807,13 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
           </div>
 
           {/* Reset All Filters Bar (When active) */}
-          {(selectedStatus !== 'ALL' || dateFilter !== 'ALL' || searchQuery || customStartDate || customEndDate) && (
+          {(selectedStatus !== 'ALL' || dateFilter !== 'TODAY' || searchQuery || customStartDate || customEndDate) && (
             <button
               onClick={() => {
                 setSelectedStatus('ALL');
-                setDateFilter('ALL');
+                setDateFilter('TODAY');
+                setAppliedCustomStartDate('');
+                setAppliedCustomEndDate('');
                 setSearchQuery('');
                 setCustomStartDate('');
                 setCustomEndDate('');
@@ -921,7 +822,6 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
               className="w-full text-xs font-bold text-amber-950 bg-amber-50 hover:bg-amber-100 active:bg-amber-200 border border-amber-300 px-3 py-2.5 rounded-xl flex items-center justify-center gap-1.5 min-h-[44px] active:scale-95 cursor-pointer transition shadow-2xs"
               title="Reset All Filters to Default"
             >
-              <RotateCcw className="w-3.5 h-3.5 text-amber-700 shrink-0" />
               <span>Reset All Filters</span>
             </button>
           )}
@@ -933,17 +833,15 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
           <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 pb-3 border-b border-slate-100">
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-xs font-bold text-slate-700 flex items-center gap-1 mr-1">
-                <Calendar className="w-3.5 h-3.5 text-amber-500" />
                 <span>Date Filter:</span>
               </span>
 
               {(
                 [
-                  { id: 'ALL', label: 'All Time' },
-                  { id: 'TODAY', label: 'Today (Day)' },
+                  { id: 'TODAY', label: 'Today' },
                   { id: 'WEEK', label: 'This Week' },
                   { id: 'MONTH', label: 'This Month' },
-                  { id: 'CUSTOM', label: 'Custom Date Range' },
+                  { id: 'CUSTOM', label: 'Custom' },
                 ] as const
               ).map((preset) => (
                 <button
@@ -951,8 +849,8 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                   onClick={() => handleDatePresetChange(preset.id)}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 ${
                     dateFilter === preset.id
-                      ? 'bg-slate-900 text-white shadow-2xs'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+                      ? 'border border-amber-400 bg-amber-400 text-slate-950'
+                      : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                   }`}
                 >
                   {preset.label}
@@ -968,10 +866,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                   <input
                     type="date"
                     value={customStartDate}
-                    onChange={(e) => {
-                      setCustomStartDate(e.target.value);
-                      setCurrentPage(1);
-                    }}
+                    onChange={(e) => handleCustomDateChange('start', e.target.value)}
                     className="bg-transparent text-xs font-semibold text-slate-800 focus:outline-none"
                   />
                 </div>
@@ -981,21 +876,18 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                   <input
                     type="date"
                     value={customEndDate}
-                    onChange={(e) => {
-                      setCustomEndDate(e.target.value);
-                      setCurrentPage(1);
-                    }}
+                    onChange={(e) => handleCustomDateChange('end', e.target.value)}
                     className="bg-transparent text-xs font-semibold text-slate-800 focus:outline-none"
                   />
                 </div>
 
+                {customDateError && (
+                  <p className="w-full text-[11px] font-medium text-amber-800">{customDateError}</p>
+                )}
+
                 {(customStartDate || customEndDate) && (
                   <button
-                    onClick={() => {
-                      setCustomStartDate('');
-                      setCustomEndDate('');
-                      setCurrentPage(1);
-                    }}
+                    onClick={clearCustomDateRange}
                     className="p-1 px-2 text-[10px] font-bold text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition cursor-pointer"
                   >
                     Clear
@@ -1008,7 +900,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
           {/* Status Filter Tabs & Search Bar Row */}
           <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
             {/* Status Tabs with count badges */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
+            <div className="flex flex-wrap items-center gap-2 pb-1 md:pb-0">
               {[
                 { key: 'ALL', label: 'All Trips' },
                 { key: 'COMPLETED', label: 'Completed' },
@@ -1025,20 +917,14 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                   <button
                     key={st.key}
                     onClick={() => handleStatusFilterChange(st.key)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+                    className={`flex min-h-10 items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold transition cursor-pointer whitespace-nowrap ${
                       selectedStatus === st.key
-                        ? 'bg-amber-400 text-slate-950 shadow-2xs'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+                        ? 'border border-amber-400 bg-amber-400 text-slate-950'
+                        : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                     }`}
                   >
                     <span>{st.label}</span>
-                    <span
-                      className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
-                        selectedStatus === st.key
-                          ? 'bg-slate-950 text-white'
-                          : 'bg-slate-200 text-slate-700'
-                      }`}
-                    >
+                    <span className="text-[11px] font-semibold tabular-nums">
                       {count}
                     </span>
                   </button>
@@ -1048,17 +934,16 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
 
             {/* Search Box & Reset on Desktop */}
             <div className="flex items-center gap-2">
-              <div className="relative flex-1 md:w-64">
-                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <div className="relative w-full md:w-64">
                 <input
                   type="text"
-                  placeholder="Search ID, passenger, phone, cab..."
+                  placeholder="Search trip, customer, phone or vehicle"
                   value={searchQuery}
                   onChange={(e) => {
                     setSearchQuery(e.target.value);
                     setCurrentPage(1);
                   }}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-7 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
                 />
                 {searchQuery && (
                   <button
@@ -1075,11 +960,13 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                 )}
               </div>
 
-              {(selectedStatus !== 'ALL' || dateFilter !== 'ALL' || searchQuery || customStartDate || customEndDate) && (
+              {(selectedStatus !== 'ALL' || dateFilter !== 'TODAY' || searchQuery || customStartDate || customEndDate) && (
                 <button
                   onClick={() => {
                     setSelectedStatus('ALL');
-                    setDateFilter('ALL');
+                    setDateFilter('TODAY');
+                    setAppliedCustomStartDate('');
+                    setAppliedCustomEndDate('');
                     setSearchQuery('');
                     setCustomStartDate('');
                     setCustomEndDate('');
@@ -1088,7 +975,6 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                   className="text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 px-2.5 py-2 rounded-xl transition cursor-pointer flex items-center gap-1 active:scale-95 shrink-0"
                   title="Reset All Active Filters"
                 >
-                  <RotateCcw className="w-3 h-3 text-amber-700" />
                   <span>Reset</span>
                 </button>
               )}
@@ -1097,184 +983,140 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
         </div>
       </div>
 
-      {/* Filter summary indicator */}
-      <div className="flex items-center justify-between text-xs text-slate-500 px-1">
-        <div>
-          Showing <strong className="text-slate-800">{filteredTrips.length}</strong> trip record
-          {filteredTrips.length === 1 ? '' : 's'}{' '}
-          {dateFilter !== 'ALL' && (
-            <span>
-              in <strong>{dateFilter.toLowerCase()}</strong> range
-            </span>
-          )}
-        </div>
-        {dateFilter === 'CUSTOM' && (customStartDate || customEndDate) && (
-          <span className="text-[11px] font-mono bg-amber-50 text-amber-900 px-2 py-0.5 rounded border border-amber-200">
-            {customStartDate || 'Start'} → {customEndDate || 'Present'}
-          </span>
-        )}
-      </div>
-
       {/* Main Trip Records Container */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xs overflow-hidden">
-        {filteredTrips.length === 0 ? (
-          <div className="p-12 text-center">
-            <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-3 border border-amber-200">
-              <History className="w-7 h-7" />
-            </div>
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+        {visibleFilteredTrips.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-3 px-4 py-8 text-center sm:py-10">
             <h4 className="text-sm font-black text-slate-900">No matching trips found</h4>
-            <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
-              No trip ledger history matches your selected status, search query, or date range.
-            </p>
             <button
               onClick={() => {
                 setSelectedStatus('ALL');
-                setDateFilter('ALL');
+                setDateFilter('TODAY');
+                setAppliedCustomStartDate('');
+                setAppliedCustomEndDate('');
                 setSearchQuery('');
                 setCustomStartDate('');
                 setCustomEndDate('');
                 setCurrentPage(1);
               }}
-              className="mt-4 px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition cursor-pointer"
+              className="min-h-10 rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white transition hover:bg-slate-800 cursor-pointer"
             >
               Reset Filters
             </button>
           </div>
-        ) : viewMode === 'cards' ? (
+        ) : true ? (
           /* Cards Grid View (Responsive & Touch-Friendly) */
-          <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-50/40">
-            {paginatedTrips.map((t) => (
-              <div
-                key={t.doc_id || t.trip_id}
-                className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-2xs hover:border-slate-300 transition flex flex-col justify-between gap-3.5"
-              >
-                {/* Header: ID, Date, Status */}
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <span className="font-mono font-black text-slate-900 text-sm tracking-tight">
-                      #{t.trip_id.replace(/^TRIP-?/, '')}
-                    </span>
-                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">
-                      {new Date(t.created_at).toLocaleString('en-GB', {
-                        day: '2-digit',
-                        month: 'short',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </p>
-                  </div>
-                  <div>{getStatusBadge(t.status)}</div>
-                </div>
+          <div className="grid grid-cols-1 gap-3 bg-slate-50/50 p-3">
+            {paginatedTrips.map((t) => {
+              const driverForTrip = getDriverForTrip(t);
+              const createdAt = new Date(t.created_at);
 
-                {/* Customer & Cab Meta */}
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex items-center justify-between text-xs">
-                  <div>
-                    <p className="font-bold text-slate-900">{t.customer_name}</p>
-                    <p className="text-[11px] font-mono text-slate-500 mt-0.5">{t.customer_phone}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-base font-black text-slate-950 font-mono">
-                      ₹{t.final_fare || t.estimated_fare || 0}
-                    </p>
-                    <p className="text-[10px] text-slate-500 font-medium">
-                      {t.vehicle_category || 'Mini'}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Journey Route */}
-                <div className="space-y-2 text-xs bg-white p-2.5 rounded-xl border border-slate-100">
-                  <div className="flex items-start gap-2">
-                    <div className="w-2 h-2 rounded-full bg-emerald-600 mt-1 shrink-0" />
-                    <span className="text-slate-800 text-xs font-medium line-clamp-1 leading-relaxed">
-                      {t.pickup_location}
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <div className="w-2 h-2 rounded-full bg-rose-600 mt-1 shrink-0" />
-                    <span className="text-slate-600 text-xs line-clamp-1 leading-relaxed">
-                      {t.drop_location}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Driver Details & Office Fee Status */}
-                {(() => {
-                  const driverForTrip = getDriverForTrip(t);
-                  return (
-                    <div className="bg-slate-50/80 p-2.5 rounded-xl border border-slate-200/60 space-y-2">
-                      <div className="flex items-center justify-between text-[11px] text-slate-600">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                          <span className="truncate">
-                            Driver: <strong className="text-slate-900">{t.driver_name || driverForTrip?.driver_name || 'Unassigned'}</strong>
-                          </span>
-                        </div>
-                        <span className="font-mono text-slate-500 shrink-0">{t.vehicle_number || driverForTrip?.vehicle_number || ''}</span>
-                      </div>
-
-                      {/* Driver Fee Status & Edit Button for Assigned Driver Only */}
-                      {(t.driver_id || driverForTrip) && onSetDriverOfficeDue && (
-                        <div className="flex items-center justify-between pt-1.5 border-t border-slate-200/60 text-xs">
-                          <div>
-                            {driverForTrip?.payment_status === 'DUE' && (driverForTrip.payment_amount || 0) > 0 ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
-                                <span>₹{driverForTrip.payment_amount} Due</span>
-                                <span className="opacity-70 font-normal">({driverForTrip.payment_note || 'Trip CC'})</span>
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
-                                <span>Dues Cleared</span>
-                              </span>
-                            )}
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => handleOpenDriverFeeModal(t)}
-                            className="px-2.5 py-1 text-[11px] font-bold text-amber-950 bg-amber-300 hover:bg-amber-400 active:bg-amber-500 rounded-lg transition flex items-center gap-1 cursor-pointer shadow-2xs"
-                            title={`Edit Office Fee for driver ${t.driver_name || t.driver_id}`}
-                          >
-                            <IndianRupee className="w-3 h-3 text-amber-900" />
-                            <span>Edit Office Fee</span>
-                          </button>
-                        </div>
-                      )}
+              return (
+                <article
+                  key={t.doc_id || t.trip_id}
+                  className="flex min-w-0 flex-col rounded-xl border border-slate-200 bg-white p-3 sm:p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="break-words text-sm font-bold text-slate-950">
+                        #{t.trip_id.replace(/^TRIP-?/, '')} · {t.vehicle_category || 'Mini'}
+                      </h3>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {createdAt.toLocaleDateString('en-GB', {
+                          day: '2-digit',
+                          month: 'short',
+                          year: 'numeric',
+                        })}{' '}
+                        · {createdAt.toLocaleTimeString('en-US', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          hour12: true,
+                        })}
+                      </p>
                     </div>
-                  );
-                })()}
+                    <div className="shrink-0 pt-0.5">{getStatusBadge(t.status)}</div>
+                  </div>
 
-                {/* Action Buttons: Live Tracking (if available), Delete */}
-                <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-                  {onOpenTrackingModal && (
-                    <button
-                      onClick={() => onOpenTrackingModal(t)}
-                      className="flex-1 min-h-[40px] text-xs font-bold text-slate-900 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 px-3 py-2 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
-                      title="Open Live Tracking & Route"
+                  <div className="mt-2 min-w-0">
+                    <p className="break-words text-sm font-semibold text-slate-950">{t.customer_name}</p>
+                    <a
+                      href={`tel:${t.customer_phone}`}
+                      className="mt-0.5 inline-block text-xs text-amber-800 hover:underline"
                     >
-                      <Radio className="w-3.5 h-3.5 text-slate-950" />
-                      <span>Track Route</span>
-                    </button>
-                  )}
+                      {t.customer_phone}
+                    </a>
+                  </div>
 
-                  <button
-                    onClick={() => setTripToDelete(t)}
-                    className={`${
-                      onOpenTrackingModal ? 'w-10' : 'flex-1'
-                    } min-h-[40px] flex items-center justify-center text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl border border-rose-100 transition cursor-pointer shrink-0`}
-                    title="Delete Trip Record"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    {!onOpenTrackingModal && <span className="ml-1.5 text-xs font-bold">Delete Record</span>}
-                  </button>
-                </div>
-              </div>
-            ))}
+                  <dl className="mt-3 space-y-1.5 text-xs">
+                    <div className="flex items-start gap-3">
+                      <dt className="w-14 shrink-0 pt-0.5 font-medium text-slate-500">Pickup</dt>
+                      <dd className="min-w-0 break-words leading-relaxed text-slate-800">
+                        {t.pickup_location}
+                      </dd>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <dt className="w-14 shrink-0 pt-0.5 font-medium text-slate-500">Drop</dt>
+                      <dd className="min-w-0 break-words leading-relaxed text-slate-800">
+                        {t.drop_location}
+                      </dd>
+                    </div>
+                  </dl>
+
+                  <dl className="mt-3 space-y-2 text-xs">
+                    <div className="flex items-start justify-between gap-3">
+                      <dt className="shrink-0 text-slate-500">Fare</dt>
+                      <dd className="text-right text-base font-bold text-slate-950 tabular-nums">
+                        ₹{t.final_fare || t.estimated_fare || 0}
+                      </dd>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <dt className="shrink-0 text-slate-500">Driver</dt>
+                      <dd className="min-w-0 break-words text-right text-slate-800">
+                        {t.driver_name || driverForTrip?.driver_name || 'Unassigned'}
+                        {(t.vehicle_number || driverForTrip?.vehicle_number) && (
+                          <span className="ml-1 text-slate-500">
+                            · {t.vehicle_number || driverForTrip?.vehicle_number}
+                          </span>
+                        )}
+                      </dd>
+                    </div>
+                  </dl>
+
+                  <div className="mt-3 grid grid-cols-3 gap-2 pt-1">
+                    {(t.driver_id || driverForTrip) && onSetDriverOfficeDue && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenDriverFeeModal(t)}
+                        className="min-h-10 rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                      >
+                        Edit Office Fee
+                      </button>
+                    )}
+                    {onOpenEditTrip && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenEditTrip(t)}
+                        className="min-h-10 rounded-lg bg-amber-400 px-2 py-2 text-xs font-medium text-slate-950 transition hover:bg-amber-300"
+                      >
+                        Edit Trip
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setTripToDelete(t)}
+                      className="min-h-10 rounded-lg border border-rose-300 bg-white px-2 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-50"
+                    >
+                      Delete Record
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         ) : (
-          /* Table View (Desktop Structured Table) */
-          <div className="overflow-x-auto">
+          <>
+          {/* Desktop table view */}
+          <div className="hidden overflow-x-auto md:block">
             <table className="w-full text-left text-xs text-slate-600">
               <thead className="bg-slate-50/90 text-slate-700 uppercase font-bold text-[10px] tracking-wider border-b border-slate-200">
                 <tr>
@@ -1319,21 +1161,20 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
 
                     <td className="py-3.5 px-4">
                       <div className="font-bold text-slate-900">{t.customer_name}</div>
-                      <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
-                        <Phone className="w-2.5 h-2.5 text-slate-400" />
-                        <span>{t.customer_phone}</span>
-                      </div>
+                      <a href={`tel:${t.customer_phone}`} className="text-[10px] text-amber-800 font-mono hover:underline">
+                        {t.customer_phone}
+                      </a>
                     </td>
 
-                    <td className="py-3.5 px-4 max-w-xs">
-                      <div className="space-y-1">
-                        <div className="text-slate-800 font-normal truncate flex items-center gap-1.5">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0" />
-                          <span className="truncate">{t.pickup_location}</span>
+                    <td className="max-w-xs px-4 py-3.5">
+                      <div className="space-y-2">
+                        <div>
+                          <span className="block text-[10px] font-medium text-slate-500">Pickup</span>
+                          <span className="mt-0.5 block break-words leading-relaxed text-slate-800">{t.pickup_location}</span>
                         </div>
-                        <div className="text-slate-500 truncate flex items-center gap-1.5">
-                          <span className="w-1.5 h-1.5 rounded-full bg-rose-600 shrink-0" />
-                          <span className="truncate">{t.drop_location}</span>
+                        <div>
+                          <span className="block text-[10px] font-medium text-slate-500">Drop</span>
+                          <span className="mt-0.5 block break-words leading-relaxed text-slate-600">{t.drop_location}</span>
                         </div>
                       </div>
                     </td>
@@ -1343,27 +1184,11 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                         const driverForTrip = getDriverForTrip(t);
                         return (
                           <div>
-                            <div className="font-semibold text-slate-900 flex items-center gap-1.5">
-                              <span>{t.driver_name || driverForTrip?.driver_name || 'Unassigned'}</span>
-                              {driverForTrip && (
-                                driverForTrip.payment_status === 'DUE' && (driverForTrip.payment_amount || 0) > 0 ? (
-                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300">
-                                    ₹{driverForTrip.payment_amount} Due
-                                  </span>
-                                ) : (
-                                  <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                    Cleared
-                                  </span>
-                                )
-                              )}
+                            <div className="font-semibold text-slate-900">
+                              {t.driver_name || driverForTrip?.driver_name || 'Unassigned'}
                             </div>
-                            <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1 mt-0.5">
+                            <div className="mt-0.5 text-[10px] text-slate-500">
                               <span>{t.vehicle_number || driverForTrip?.vehicle_number || t.driver_id || 'No Cab'}</span>
-                              {driverForTrip?.payment_note && driverForTrip.payment_status === 'DUE' && (
-                                <span className="text-[9px] text-slate-400 truncate max-w-[120px]">
-                                  • {driverForTrip.payment_note}
-                                </span>
-                              )}
                             </div>
                           </div>
                         );
@@ -1382,36 +1207,44 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                     <td className="py-3.5 px-4 whitespace-nowrap">{getStatusBadge(t.status)}</td>
 
                     <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                      <div className="flex items-center justify-end gap-1.5">
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
                         {(t.driver_id || getDriverForTrip(t)) && onSetDriverOfficeDue && (
                           <button
                             type="button"
                             onClick={() => handleOpenDriverFeeModal(t)}
-                            className="bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300 font-bold px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition cursor-pointer shadow-2xs"
+                            className="min-h-9 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
                             title={`Edit Office Fee for driver who completed this trip (${t.driver_name || t.driver_id})`}
                           >
-                            <IndianRupee className="w-3.5 h-3.5 text-amber-800" />
                             <span>Edit Office Fee</span>
+                          </button>
+                        )}
+
+                        {onOpenEditTrip && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenEditTrip(t)}
+                            className="min-h-9 rounded-lg bg-amber-400 px-2.5 py-1.5 text-xs font-medium text-slate-950 transition hover:bg-amber-300"
+                          >
+                            Edit Trip
                           </button>
                         )}
 
                         {onOpenTrackingModal && (
                           <button
                             onClick={() => onOpenTrackingModal(t)}
-                            className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition cursor-pointer shadow-2xs"
+                            className="min-h-9 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
                             title="Open Live Tracking & Route"
                           >
-                            <Radio className="w-3.5 h-3.5 text-slate-950" />
                             <span>Track</span>
                           </button>
                         )}
 
                         <button
                           onClick={() => setTripToDelete(t)}
-                          className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                          className="min-h-9 rounded-lg border border-rose-300 bg-white px-2.5 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-50"
                           title="Delete Trip"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          Delete Record
                         </button>
                       </div>
                     </td>
@@ -1420,17 +1253,114 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
               </tbody>
             </table>
           </div>
+          {/* Compact mobile list view */}
+          <div className="divide-y divide-slate-200 bg-white md:hidden">
+            {paginatedTrips.map((t) => {
+              const driverForTrip = getDriverForTrip(t);
+              const fare = t.final_fare || t.estimated_fare || 0;
+              const createdAt = new Date(t.created_at);
+
+              return (
+                <section key={t.doc_id || t.trip_id} className="px-3 py-4 sm:px-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="break-words text-sm font-bold text-slate-950">
+                        #{t.trip_id.replace(/^TRIP-?/, '')} · {t.vehicle_category || 'Mini'}
+                      </h3>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {createdAt.toLocaleDateString('en-GB', {
+                          day: '2-digit',
+                          month: 'short',
+                          year: 'numeric',
+                        })}{' '}
+                        · {createdAt.toLocaleTimeString('en-US', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          hour12: true,
+                        })}
+                      </p>
+                    </div>
+                    <div className="shrink-0 pt-0.5">{getStatusBadge(t.status)}</div>
+                  </div>
+
+                  <div className="mt-3 min-w-0">
+                    <p className="break-words text-sm font-semibold text-slate-950">{t.customer_name}</p>
+                    <a href={`tel:${t.customer_phone}`} className="mt-0.5 inline-block text-xs font-mono text-amber-800 hover:underline">
+                      {t.customer_phone}
+                    </a>
+                  </div>
+
+                  <dl className="mt-3 grid grid-cols-1 gap-2 text-xs">
+                    <div>
+                      <dt className="font-medium text-slate-500">Pickup</dt>
+                      <dd className="mt-0.5 min-w-0 break-words leading-relaxed text-slate-800">{t.pickup_location}</dd>
+                    </div>
+                    <div>
+                      <dt className="font-medium text-slate-500">Drop</dt>
+                      <dd className="mt-0.5 min-w-0 break-words leading-relaxed text-slate-800">{t.drop_location}</dd>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2">
+                      <dt className="text-slate-500">Fare</dt>
+                      <dd className="font-semibold text-slate-950">₹{fare}</dd>
+                    </div>
+                    {(t.driver_name || driverForTrip || t.vehicle_number || t.driver_id) && (
+                      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 pt-1">
+                        <dt className="text-slate-500">Driver</dt>
+                        <dd className="min-w-0 break-words text-right text-slate-800">
+                          {t.driver_name || driverForTrip?.driver_name || 'Unassigned'}
+                          {(t.vehicle_number || driverForTrip?.vehicle_number) && (
+                            <span className="ml-1 font-mono text-slate-500">
+                              · {t.vehicle_number || driverForTrip?.vehicle_number}
+                            </span>
+                          )}
+                        </dd>
+                      </div>
+                    )}
+                  </dl>
+
+                  <div className="mt-3 grid grid-cols-1 gap-2 border-t border-slate-100 pt-3 min-[360px]:grid-cols-3">
+                    {(t.driver_id || driverForTrip) && onSetDriverOfficeDue && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenDriverFeeModal(t)}
+                        className="min-h-10 rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                      >
+                        Edit Office Fee
+                      </button>
+                    )}
+                    {onOpenEditTrip && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenEditTrip(t)}
+                        className="min-h-10 rounded-lg bg-amber-400 px-2 py-2 text-xs font-medium text-slate-950 transition hover:bg-amber-300"
+                      >
+                        Edit Trip
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setTripToDelete(t)}
+                      className="min-h-10 rounded-lg border border-rose-300 bg-white px-2 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-50"
+                    >
+                      Delete Record
+                    </button>
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+          </>
         )}
 
         {/* Pagination Toolbar */}
-        {filteredTrips.length > TRIPS_PER_PAGE && (
+        {visibleFilteredTrips.length > TRIPS_PER_PAGE && (
           <div className="p-3.5 sm:p-4 bg-white border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
             <div className="text-slate-500 font-medium">
               Showing <strong className="text-slate-800">{(currentPage - 1) * TRIPS_PER_PAGE + 1}</strong> to{' '}
               <strong className="text-slate-800">
-                {Math.min(currentPage * TRIPS_PER_PAGE, filteredTrips.length).toLocaleString()}
+                {Math.min(currentPage * TRIPS_PER_PAGE, visibleFilteredTrips.length).toLocaleString()}
               </strong>{' '}
-              of <strong className="text-slate-800">{filteredTrips.length.toLocaleString()}</strong> trips
+              of <strong className="text-slate-800">{visibleFilteredTrips.length.toLocaleString()}</strong> trips
             </div>
 
             <div className="flex items-center gap-1.5">
@@ -1439,7 +1369,6 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                 disabled={currentPage === 1}
                 className="p-1.5 px-3 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition flex items-center gap-1 font-semibold"
               >
-                <ChevronLeft className="w-4 h-4" />
                 <span>Prev</span>
               </button>
 
@@ -1457,7 +1386,6 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                 className="p-1.5 px-3 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition flex items-center gap-1 font-semibold"
               >
                 <span>Next</span>
-                <ChevronRight className="w-4 h-4" />
               </button>
             </div>
           </div>
@@ -1488,7 +1416,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
               <div className="text-xs text-slate-600">
                 Customer: <strong>{tripToDelete.customer_name}</strong> ({tripToDelete.customer_phone})
               </div>
-              <div className="text-xs text-slate-500 truncate mt-1">
+              <div className="mt-1 break-words text-xs text-slate-500">
                 Route: {tripToDelete.pickup_location} → {tripToDelete.drop_location}
               </div>
             </div>
@@ -1540,21 +1468,14 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
         const currentStatus = drv?.payment_status || 'CLEARED';
 
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
-            <div className="bg-white rounded-2xl max-w-lg w-full p-4 sm:p-6 shadow-2xl border border-slate-200 overflow-hidden relative animate-in zoom-in-95 duration-150 flex flex-col max-h-[92vh]">
-              {/* Header: Clean, modern, no bulky icon container */}
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
-                <div className="min-w-0 pr-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-base font-bold text-slate-900">
-                      Trip Office Fee
-                    </h3>
-                    <span className="text-[11px] font-mono font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full border border-amber-200">
-                      Trip #{feeTrip.trip_id.replace(/^TRIP-?/, '')}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500 mt-0.5 truncate">
-                    Driver: <span className="font-semibold text-slate-800">{targetDriverName}</span> • <span className="font-mono">{feeTrip.vehicle_number || drv?.vehicle_number || 'No Vehicle'}</span>
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50">
+            <div className="mx-auto flex min-h-screen w-full max-w-3xl flex-col bg-white px-4 pb-[env(safe-area-inset-bottom)] pt-4 sm:px-6 sm:pt-6 min-[768px]:max-[1024px]:max-w-2xl min-[768px]:max-[1024px]:px-6 lg:max-w-4xl lg:px-8 lg:pt-8">
+              {/* Header */}
+              <div className="flex shrink-0 flex-col gap-3 border-b border-slate-200 pb-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-bold text-slate-950">Trip Office Fee</h3>
+                  <p className="mt-0.5 break-words text-xs text-slate-500">
+                    Trip #{feeTrip.trip_id.replace(/^TRIP-?/, '')} · {targetDriverName}
                   </p>
                 </div>
                 <button
@@ -1564,145 +1485,83 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                     setFeeFeedback(null);
                     setFeeStep(1);
                   }}
-                  className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition cursor-pointer shrink-0"
-                  aria-label="Close"
+                  className="min-h-10 self-end whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 transition hover:bg-slate-50 sm:self-auto"
+                  aria-label="Back to Trips"
                 >
-                  <X className="w-5 h-5" />
+                  Back to Trips
                 </button>
               </div>
 
-              {/* Full Visible Trip Details Card - Complete Route, No Truncation */}
-              <div className="mt-3 p-3 sm:p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-2.5 shrink-0">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-200/60">
-                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                    Trip Information
+              {/* Compact Trip Summary */}
+              <div className="mt-4 grid shrink-0 grid-cols-2 gap-x-4 gap-y-3 border-b border-slate-200 pb-4 text-xs">
+                <div className="min-w-0">
+                  <span className="block text-slate-500">Fare</span>
+                  <span className="mt-0.5 block font-semibold text-slate-900 tabular-nums">
+                    ₹{feeTrip.final_fare || feeTrip.estimated_fare || 0}
                   </span>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200 text-xs">
-                      Fare: ₹{feeTrip.final_fare || feeTrip.estimated_fare || 0}
-                    </span>
-                    <span className={`text-[10px] font-black px-2 py-0.5 rounded uppercase tracking-wider ${
-                      feeTrip.status === 'COMPLETED'
-                        ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
-                        : 'bg-blue-100 text-blue-900 border border-blue-300'
-                    }`}>
-                      {feeTrip.status}
-                    </span>
-                  </div>
+                </div>
+                <div className="min-w-0">
+                  <span className="block text-slate-500">Status</span>
+                  <span className="mt-0.5 block break-words font-semibold capitalize text-slate-900">
+                    {feeTrip.status.replace(/_/g, ' ').toLowerCase()}
+                  </span>
+                </div>
+                <div className="min-w-0">
+                  <span className="block text-slate-500">Vehicle</span>
+                  <span className="mt-0.5 block break-words font-mono font-semibold text-slate-900">
+                    {feeTrip.vehicle_number || drv?.vehicle_number || 'N/A'}
+                  </span>
+                </div>
+                <div className="min-w-0">
+                  <span className="block text-slate-500">Office Due</span>
+                  <span className={`mt-0.5 block break-words font-semibold ${
+                    currentStatus === 'DUE' && currentAmount > 0
+                      ? 'text-amber-800'
+                      : 'text-emerald-700'
+                  }`}>
+                    {currentStatus === 'DUE' && currentAmount > 0
+                      ? `₹${currentAmount} Due`
+                      : 'Cleared'}
+                  </span>
                 </div>
 
-                {/* Full Route Details - Fully Visible, No Truncation */}
-                <div className="space-y-2">
-                  <div className="flex items-start gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 ring-4 ring-emerald-100 mt-1 shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Pickup Location</span>
-                      <p className="font-semibold text-slate-900 break-words text-xs leading-snug">
-                        {feeTrip.pickup_location || 'Not Specified'}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full bg-rose-500 ring-4 ring-rose-100 mt-1 shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Drop Location</span>
-                      <p className="font-semibold text-slate-900 break-words text-xs leading-snug">
-                        {feeTrip.drop_location || 'Not Specified'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Driver, Vehicle & Passenger Grid */}
-                <div className="pt-2 border-t border-slate-200/60 grid grid-cols-2 gap-2 text-[11px]">
-                  <div>
-                    <span className="text-slate-400 block">Assigned Driver</span>
-                    <span className="font-bold text-slate-800">{targetDriverName}</span>{' '}
-                    <span className="font-mono text-slate-500">({targetDriverId})</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block">Vehicle Plate</span>
-                    <span className="font-mono font-bold text-slate-800">
-                      {feeTrip.vehicle_number || drv?.vehicle_number || 'N/A'}
-                    </span>
-                  </div>
-                  {feeTrip.customer_name && (
-                    <div className="col-span-2 flex items-center justify-between text-[11px] pt-1 border-t border-slate-200/40">
-                      <span className="text-slate-500">Customer: <strong className="text-slate-700">{feeTrip.customer_name}</strong></span>
-                      {feeTrip.customer_phone && (
-                        <span className="font-mono text-slate-600">{feeTrip.customer_phone}</span>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Current Driver Due Status */}
-                <div className="pt-1.5 border-t border-slate-200/60 flex items-center justify-between text-xs">
-                  <span className="text-slate-500 font-medium">Driver Office Due:</span>
-                  {currentStatus === 'DUE' && currentAmount > 0 ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
-                      ₹{currentAmount} DUE {drv?.payment_note ? `(${drv.payment_note})` : ''}
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                      CLEARED / VERIFIED
-                    </span>
-                  )}
-                </div>
               </div>
 
               {/* Step-by-Step Progress Navigation */}
-              <div className="mt-3 grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-xl shrink-0">
+              <div className="mt-4 grid shrink-0 grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={() => setFeeStep(1)}
-                  className={`py-1.5 px-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
+                  className={`flex min-h-10 items-center justify-center rounded-lg border px-2 text-xs font-bold transition cursor-pointer ${
                     feeStep === 1
-                      ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
-                      : 'text-slate-600 hover:text-slate-900'
+                      ? 'border-amber-500 bg-amber-500 text-slate-950'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                   }`}
                 >
-                  <span className={`w-4 h-4 rounded-full text-[10px] flex items-center justify-center font-black ${
-                    feeStep === 1 ? 'bg-amber-500 text-slate-950' : 'bg-slate-200 text-slate-700'
-                  }`}>
-                    1
-                  </span>
                   <span>Amount</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setFeeStep(2)}
-                  className={`py-1.5 px-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
+                  className={`flex min-h-10 items-center justify-center rounded-lg border px-2 text-xs font-bold transition cursor-pointer ${
                     feeStep === 2
-                      ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
-                      : 'text-slate-600 hover:text-slate-900'
+                      ? 'border-amber-500 bg-amber-500 text-slate-950'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                   }`}
                 >
-                  <span className={`w-4 h-4 rounded-full text-[10px] flex items-center justify-center font-black ${
-                    feeStep === 2 ? 'bg-amber-500 text-slate-950' : 'bg-slate-200 text-slate-700'
-                  }`}>
-                    2
-                  </span>
                   <span>Purpose</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setFeeStep(3)}
-                  className={`py-1.5 px-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
+                  className={`flex min-h-10 items-center justify-center rounded-lg border px-2 text-xs font-bold transition cursor-pointer ${
                     feeStep === 3
-                      ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
-                      : 'text-slate-600 hover:text-slate-900'
+                      ? 'border-amber-500 bg-amber-500 text-slate-950'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                   }`}
                 >
-                  <span className={`w-4 h-4 rounded-full text-[10px] flex items-center justify-center font-black ${
-                    feeStep === 3 ? 'bg-amber-500 text-slate-950' : 'bg-slate-200 text-slate-700'
-                  }`}>
-                    3
-                  </span>
                   <span>Confirm</span>
                 </button>
               </div>
@@ -1716,28 +1575,20 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                       : 'bg-rose-50 text-rose-900 border border-rose-200'
                   }`}
                 >
-                  {feeFeedback.type === 'success' ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                  )}
                   <span className="font-semibold">{feeFeedback.message}</span>
                 </div>
               )}
 
               {/* Step Body */}
-              <div className="mt-3 flex-1 overflow-y-auto space-y-3.5 text-xs pr-0.5">
+               <div className="mt-4 flex-1 space-y-3.5 overflow-visible pr-0.5 text-xs">
                 {/* STEP 1: AMOUNT */}
                 {feeStep === 1 && (
                   <div className="space-y-3 animate-in fade-in duration-150">
                     <div>
                       <label className="block text-slate-700 font-bold mb-1.5">
-                        Office Fee / CC Amount (₹ INR)
+                        Office Fee Amount (₹)
                       </label>
                       <div className="relative">
-                        <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 font-bold text-lg">
-                          ₹
-                        </div>
                         <input
                           type="number"
                           min="0"
@@ -1746,48 +1597,24 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                           autoFocus
                           value={feeAmount}
                           onChange={(e) => setFeeAmount(e.target.value)}
-                          placeholder="e.g. 50"
-                          className="w-full pl-8 pr-4 py-3 rounded-xl border border-slate-300 text-slate-900 text-xl font-bold focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
+                          placeholder="Enter amount"
+                           className="w-full rounded-lg border border-slate-300 px-3 py-3 text-xl font-bold text-slate-900 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                         />
                       </div>
                     </div>
 
-                    {/* Fast Preset Chips */}
-                    <div>
-                      <span className="text-[11px] text-slate-500 font-bold uppercase tracking-wider block mb-1.5">
-                        Quick Fee Presets
-                      </span>
-                      <div className="grid grid-cols-4 gap-1.5">
-                        {['30', '50', '100', '150', '200', '300', '500', '1000'].map((amt) => (
-                          <button
-                            key={amt}
-                            type="button"
-                            onClick={() => setFeeAmount(amt)}
-                            className={`py-2 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center ${
-                              feeAmount === amt
-                                ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-2xs font-black'
-                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                            }`}
-                          >
-                            ₹{amt}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
                     {/* Instant Clear Due Option */}
-                    <div className="pt-1">
+                    <div className="mt-3">
                       <button
                         type="button"
                         onClick={() => setFeeAmount('0')}
-                        className={`w-full py-2 px-3 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                        className={`w-full min-h-11 rounded-lg px-3 text-xs font-bold border transition cursor-pointer flex items-center justify-center ${
                           feeAmount === '0'
                             ? 'bg-emerald-600 text-white border-emerald-700 shadow-2xs'
                             : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
                         }`}
                       >
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>Set to ₹0 (Clear All Dues)</span>
+                        <span>Clear Dues</span>
                       </button>
                     </div>
                   </div>
@@ -1806,16 +1633,13 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                             key={preset}
                             type="button"
                             onClick={() => setFeeNotePreset(preset)}
-                            className={`w-full p-2.5 rounded-xl border text-left font-bold text-xs transition cursor-pointer flex items-center justify-between ${
+                            className={`w-full min-h-11 rounded-lg border px-3 text-left font-bold text-xs transition cursor-pointer flex items-center justify-between ${
                               feeNotePreset === preset
                                 ? 'bg-amber-50 border-amber-500 text-amber-950 shadow-2xs'
                                 : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
                             }`}
                           >
                             <span>{preset}</span>
-                            {feeNotePreset === preset && (
-                              <Check className="w-4 h-4 text-amber-600 shrink-0" />
-                            )}
                           </button>
                         ))}
                       </div>
@@ -1836,7 +1660,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                           }
                         }}
                         placeholder={`e.g. Convenience charge for Trip #${feeTrip.trip_id}`}
-                        className="w-full border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-medium text-xs focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
+                        className="w-full min-h-11 border border-slate-300 rounded-lg px-3 py-2 text-slate-900 font-medium text-xs focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                       />
                     </div>
                   </div>
@@ -1846,34 +1670,16 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                 {feeStep === 3 && (
                   <div className="space-y-3 animate-in fade-in duration-150">
                     {/* Summary Card */}
-                    <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-600 font-medium">Driver:</span>
-                        <span className="font-bold text-slate-900">
-                          {targetDriverName} ({targetDriverId})
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-600 font-medium">Vehicle:</span>
-                        <span className="font-mono font-bold text-slate-800">
-                          {feeTrip.vehicle_number || drv?.vehicle_number || 'N/A'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-600 font-medium">Trip ID:</span>
-                        <span className="font-mono font-bold text-slate-800">
-                          #{feeTrip.trip_id}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between border-t border-amber-200/80 pt-2">
-                        <span className="text-slate-600 font-medium">Fee Amount:</span>
-                        <span className="text-base font-black text-amber-950">
+                    <div className="space-y-2 border-y border-slate-200 py-3">
+                      <div className="flex items-center justify-between gap-4">
+                        <span className="text-slate-600 font-medium">Office Fee Amount:</span>
+                        <span className="shrink-0 text-base font-black text-amber-950">
                           ₹{feeAmount || 0}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-600 font-medium">Note / Reason:</span>
-                        <span className="font-bold text-slate-900 text-right truncate max-w-[200px]">
+                      <div className="flex items-start justify-between gap-4">
+                        <span className="text-slate-600 font-medium">Payment Purpose:</span>
+                        <span className="max-w-[60%] break-words text-right font-bold text-slate-900">
                           {feeNotePreset === 'CUSTOM' ? (customFeeNote.trim() || 'Trip CC (Convenience Charge)') : feeNotePreset}
                         </span>
                       </div>
@@ -1883,7 +1689,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
                         <label className="block text-slate-700 font-bold text-xs">
-                          Office UPI ID <span className="text-slate-400 font-normal">(Default is blank)</span>
+                          Office UPI ID
                         </label>
                         {feeOfficeUpi ? (
                           <button
@@ -1899,7 +1705,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                             onClick={() => setFeeOfficeUpi('123mdcreation@okaxis')}
                             className="text-[11px] text-amber-800 hover:text-amber-900 font-bold bg-amber-100 hover:bg-amber-200 border border-amber-300 px-2 py-0.5 rounded-lg transition cursor-pointer"
                           >
-                            + Choose Default ID
+                            Choose Default ID
                           </button>
                         )}
                       </div>
@@ -1907,19 +1713,19 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                         type="text"
                         value={feeOfficeUpi}
                         onChange={(e) => setFeeOfficeUpi(e.target.value)}
-                        placeholder="Blank (No UPI) - click '+ Choose Default ID' if wanted"
-                        className="w-full border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono text-xs focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 bg-slate-50/50"
+                        placeholder="Enter UPI ID (optional)"
+                        className="w-full min-h-11 border border-slate-300 rounded-lg px-3 py-2 text-slate-900 font-mono text-xs focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 bg-white"
                       />
                       <div className="flex items-center justify-between text-[11px] text-slate-500 px-0.5">
                         {feeOfficeUpi.trim() ? (
                           <span className="text-emerald-700 font-semibold">
                             {feeOfficeUpi.trim() === '123mdcreation@okaxis'
-                              ? '✓ Default ID: 123mdcreation@okaxis'
-                              : `✓ Custom: ${feeOfficeUpi.trim()}`}
+                              ? 'Default ID: 123mdcreation@okaxis'
+                              : `Custom: ${feeOfficeUpi.trim()}`}
                           </span>
                         ) : (
                           <span className="text-slate-400 italic">
-                            Currently Blank (Leave blank unless you want to attach a UPI ID)
+                            No UPI ID selected
                           </span>
                         )}
                       </div>
@@ -1929,16 +1735,15 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
               </div>
 
               {/* Step Navigation & Actions Footer */}
-              <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 shrink-0">
+              <div className="sticky bottom-0 z-10 -mx-4 mt-4 flex shrink-0 items-center justify-between gap-2 border-t border-slate-200 bg-white px-4 py-3 sm:-mx-6 sm:px-6">
                 <div className="flex items-center gap-1.5">
                   {feeStep > 1 ? (
                     <button
                       type="button"
                       onClick={() => setFeeStep((prev) => (prev - 1) as 1 | 2)}
-                      className="px-3.5 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-bold text-xs flex items-center gap-1 cursor-pointer"
+                      className="min-h-11 rounded-lg border border-slate-300 px-3 text-slate-700 hover:bg-slate-50 font-bold text-xs cursor-pointer"
                     >
-                      <ChevronLeft className="w-4 h-4" />
-                      <span>Back</span>
+                      Back
                     </button>
                   ) : (
                     <button
@@ -1948,7 +1753,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                         setFeeFeedback(null);
                         setFeeStep(1);
                       }}
-                      className="px-3.5 py-2 rounded-xl text-slate-500 hover:bg-slate-100 font-bold text-xs cursor-pointer"
+                      className="min-h-11 rounded-lg border border-slate-300 px-3 text-slate-700 hover:bg-slate-50 font-bold text-xs cursor-pointer"
                     >
                       Cancel
                     </button>
@@ -1960,11 +1765,10 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                       type="button"
                       disabled={isSavingFee}
                       onClick={handleClearDriverFee}
-                      className="hidden sm:flex px-3 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition cursor-pointer items-center gap-1"
+                      className="hidden"
                       title="Clear dues immediately to ₹0"
                     >
-                      <Check className="w-3.5 h-3.5 text-emerald-700" />
-                      <span>Clear (₹0)</span>
+                      <span>Clear Dues</span>
                     </button>
                   )}
                 </div>
@@ -1974,30 +1778,25 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                     <button
                       type="button"
                       onClick={() => setFeeStep((prev) => (prev + 1) as 2 | 3)}
-                      className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1 shadow-xs transition cursor-pointer"
+                      className="min-h-11 rounded-lg bg-amber-500 px-4 text-slate-950 font-black text-xs transition hover:bg-amber-400 cursor-pointer"
                     >
-                      <span>Next</span>
-                      <ChevronRight className="w-4 h-4" />
+                      Next
                     </button>
                   ) : (
                     <button
                       type="button"
                       disabled={isSavingFee}
                       onClick={handleSaveDriverFee}
-                      className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shadow-md shadow-amber-500/20 flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                      className="min-h-11 rounded-lg bg-amber-500 px-4 text-slate-950 font-black text-xs transition hover:bg-amber-400 cursor-pointer disabled:opacity-50"
                     >
                       {isSavingFee ? (
                         <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
                           <span>Saving...</span>
                         </>
                       ) : (
                         <>
-                          <Check className="w-4 h-4" />
                           <span>
-                            {Number(feeAmount) > 0
-                              ? `Set Fee (₹${feeAmount})`
-                              : 'Clear Dues (₹0)'}
+                            Save Office Fee
                           </span>
                         </>
                       )}

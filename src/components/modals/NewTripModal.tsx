@@ -16,7 +16,6 @@ import {
   Navigation,
   Check,
   ChevronRight,
-  ShieldCheck,
   FileText,
   Send,
   Sliders,
@@ -26,12 +25,9 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  PhoneCall,
   ArrowLeft,
   ArrowRight,
-  MessageSquare,
 } from 'lucide-react';
-import { DriverAvatar } from '../DriverAvatar';
 import { DriverSearchSelect } from '../DriverSearchSelect';
 import { GooglePlacesInput } from '../GooglePlacesInput';
 import { RouteMapPreview } from '../RouteMapPreview';
@@ -50,19 +46,42 @@ interface NewTripModalProps {
 
 const CATEGORY_DEFAULT_RATES: Record<
   string,
-  { baseFare: number; kmsFare: number; hourFare: number }
+  {
+    regular: { baseFare: number | null; kmsFare: number | null };
+    rental: { hourFare: number | null; kmsFare: number | null };
+  }
 > = {
-  Mini: { baseFare: 80, kmsFare: 28, hourFare: 350 },
-  MINI: { baseFare: 80, kmsFare: 28, hourFare: 350 },
-  Sedan: { baseFare: 80, kmsFare: 28, hourFare: 375 },
-  SEDAN: { baseFare: 80, kmsFare: 28, hourFare: 375 },
-  SUV: { baseFare: 200, kmsFare: 35, hourFare: 425 },
-  'SUV+': { baseFare: 250, kmsFare: 45, hourFare: 450 },
-  Innova: { baseFare: 250, kmsFare: 45, hourFare: 450 },
-  INNOVA: { baseFare: 250, kmsFare: 24, hourFare: 450 },
-  'INNOVA CRYSTA': { baseFare: 300, kmsFare: 50, hourFare: 500 },
-  CUSTOM: { baseFare: 300, kmsFare: 45, hourFare: 500 },
+  MINI: {
+    regular: { baseFare: 80, kmsFare: 28 },
+    rental: { hourFare: 350, kmsFare: 25 },
+  },
+  SEDAN: {
+    regular: { baseFare: 80, kmsFare: 28 },
+    rental: { hourFare: 375, kmsFare: 25 },
+  },
+  SUV: {
+    regular: { baseFare: 150, kmsFare: 35 },
+    rental: { hourFare: 425, kmsFare: 30 },
+  },
+  'SUV+': {
+    regular: { baseFare: 200, kmsFare: 40 },
+    rental: { hourFare: 450, kmsFare: 30 },
+  },
+  INNOVA: {
+    regular: { baseFare: 250, kmsFare: 45 },
+    rental: { hourFare: 500, kmsFare: 30 },
+  },
+  'INNOVA CRYSTA': {
+    regular: { baseFare: 300, kmsFare: 50 },
+    rental: { hourFare: 550, kmsFare: 35 },
+  },
+  CUSTOM: {
+    regular: { baseFare: null, kmsFare: null },
+    rental: { hourFare: null, kmsFare: null },
+  },
 };
+
+const fareInputValue = (value: number | null) => (value === null ? '' : String(value));
 
 export const NewTripModal: React.FC<NewTripModalProps> = ({
   isOpen,
@@ -105,18 +124,43 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
   // Total Estimated Fare
   const [estimatedFare, setEstimatedFare] = useState('');
   const [assignedDriverId, setAssignedDriverId] = useState<string>('');
+  const [isDriverSelectionOpen, setIsDriverSelectionOpen] = useState(false);
+  const [nearbyDriverCount, setNearbyDriverCount] = useState<number | null>(null);
   const [dispatchType, setDispatchType] = useState<DispatchType>('RADIUS');
   const [radiusKms, setRadiusKms] = useState('5');
   const [notes, setNotes] = useState('');
   const [sendSmsNotification, setSendSmsNotification] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  useEffect(() => {
+    if (Number(radiusKms) > 10) {
+      setRadiusKms('5');
+    }
+  }, [radiusKms]);
+
   // OTP - Optional! Starts blank
   const [otp, setOtp] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Mobile Step-by-Step Wizard state (1: Passenger, 2: Route, 3: Fare, 4: Driver & Dispatch)
+  // Booking flow state (1: booking details, 2: dispatch & confirmation)
   const [mobileStep, setMobileStep] = useState<1 | 2 | 3 | 4>(1);
+  const [mobileActionBarHeight, setMobileActionBarHeight] = useState(65);
+  const mobileActionBarRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const actionBar = mobileActionBarRef.current;
+    if (!actionBar) return;
+
+    const updateActionBarHeight = () => {
+      setMobileActionBarHeight(Math.ceil(actionBar.getBoundingClientRect().height));
+    };
+
+    const resizeObserver = new ResizeObserver(updateActionBarHeight);
+    resizeObserver.observe(actionBar);
+    updateActionBarHeight();
+
+    return () => resizeObserver.disconnect();
+  }, []);
 
   // Apply parsed booking data to form fields
   const applyParsedData = useCallback(async (data: ParsedBookingData) => {
@@ -201,6 +245,8 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
     setIncludeKmInPackageTotal(false);
     setEstimatedFare('');
     setAssignedDriverId('');
+    setIsDriverSelectionOpen(false);
+    setNearbyDriverCount(null);
     setDispatchType('RADIUS');
     setRadiusKms('5');
     setNotes('');
@@ -349,6 +395,21 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
     }
   }, [isOpen, initialBookingData, applyParsedData, resetForm]);
 
+  useEffect(() => {
+    if (
+      !isOpen ||
+      vehicleCategory !== 'MINI' ||
+      baseFare ||
+      kmsFare ||
+      hourFare ||
+      estimatedFare
+    ) {
+      return;
+    }
+
+    handleCategoryChange('MINI');
+  }, [isOpen, vehicleCategory, baseFare, kmsFare, hourFare, estimatedFare]);
+
   const handleClose = useCallback(() => {
     try {
       localStorage.removeItem(NEW_TRIP_DRAFT_KEY);
@@ -376,27 +437,41 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleCategoryChange = (cat: VehicleCategory) => {
+  function handleCategoryChange(cat: VehicleCategory, selectedTripType: TripType = tripType) {
     setVehicleCategory(cat);
-    const defaults = CATEGORY_DEFAULT_RATES[cat] || { baseFare: 80, kmsFare: 15, hourFare: 140 };
-    setBaseFare(String(defaults.baseFare));
-    setKmsFare(String(defaults.kmsFare));
-    setHourFare(String(defaults.hourFare));
+    const defaults =
+      CATEGORY_DEFAULT_RATES[cat] ||
+      CATEGORY_DEFAULT_RATES[String(cat).toUpperCase()] ||
+      CATEGORY_DEFAULT_RATES.MINI;
+    const regularDefaults = defaults.regular;
+    const rentalDefaults = defaults.rental;
 
-    if (tripType === 'REGULAR') {
+    setBaseFare(fareInputValue(regularDefaults.baseFare));
+    setHourFare(fareInputValue(rentalDefaults.hourFare));
+
+    if (selectedTripType === 'REGULAR') {
+      setKmsFare(fareInputValue(regularDefaults.kmsFare));
       const dist = distanceKm ? Number(distanceKm) : 0;
-      const calc = defaults.baseFare + defaults.kmsFare * dist;
-      setEstimatedFare(String(Math.max(defaults.baseFare, Math.round(calc))));
+      if (regularDefaults.baseFare !== null && regularDefaults.kmsFare !== null) {
+        const calc = regularDefaults.baseFare + regularDefaults.kmsFare * dist;
+        setEstimatedFare(String(Math.max(regularDefaults.baseFare, Math.round(calc))));
+      } else {
+        setEstimatedFare('');
+      }
     } else {
+      setKmsFare(fareInputValue(rentalDefaults.kmsFare));
       recalculatePackageFare(
-        String(defaults.hourFare),
+        fareInputValue(rentalDefaults.hourFare),
         packageHours,
-        String(defaults.kmsFare),
+        fareInputValue(rentalDefaults.kmsFare),
         packageKms,
         includeKmInPackageTotal
       );
+      if (rentalDefaults.hourFare === null && rentalDefaults.kmsFare === null) {
+        setEstimatedFare('');
+      }
     }
-  };
+  }
 
   const recalculateRegularFare = (b: string, k: string, d: string) => {
     const base = Number(b) || 0;
@@ -430,11 +505,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
 
   const handleTripTypeChange = (type: TripType) => {
     setTripType(type);
-    if (type === 'REGULAR') {
-      recalculateRegularFare(baseFare, kmsFare, distanceKm);
-    } else {
-      recalculatePackageFare(hourFare, packageHours, kmsFare, packageKms, includeKmInPackageTotal);
-    }
+    handleCategoryChange(vehicleCategory, type);
   };
 
   const regenerateOtp = () => {
@@ -508,7 +579,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 md:p-6 bg-slate-900/60 backdrop-blur-xs"
+      className="fixed inset-0 z-50 overflow-y-auto bg-slate-50"
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           // If user has already entered ride info, don't close on accidental backdrop click
@@ -518,22 +589,20 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
         }
       }}
     >
-      <div className="w-full max-w-5xl h-[100dvh] sm:h-auto sm:max-h-[94vh] bg-slate-50 rounded-none sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden border-0 sm:border sm:border-slate-200/90 animate-in fade-in zoom-in-95 duration-200">
+      <div className="min-h-screen w-full bg-slate-50 flex flex-col animate-in fade-in duration-200 lg:h-[100dvh] lg:min-h-0 lg:overflow-hidden">
         
         {/* Top Header Bar */}
-        <div className="px-3.5 sm:px-6 py-2.5 sm:py-3.5 bg-white border-b border-slate-200 flex items-center justify-between shrink-0 gap-2">
+        <div className="sticky top-0 z-30 px-3.5 sm:px-6 py-2.5 sm:py-3 bg-white border-b border-slate-200 flex items-center justify-between gap-2 lg:h-16 lg:px-8 lg:py-0">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold shadow-xs shrink-0">
+            <div className="hidden w-8 h-8 rounded-xl bg-amber-500 text-slate-950 items-center justify-center font-bold shadow-xs shrink-0">
               <Car className="w-4 h-4" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-1 text-[11px] sm:text-xs text-slate-400 font-medium">
-                <span>Dispatch</span>
-                <ChevronRight className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
-                <span className="text-slate-700 font-semibold truncate">New Booking</span>
+                <span className="break-words font-semibold text-slate-700">New Ride</span>
               </div>
-              <h2 className="text-sm sm:text-base md:text-lg font-bold text-slate-900 leading-tight truncate">
-                Create New Ride Dispatch
+              <h2 className="break-words text-sm font-bold leading-tight text-slate-900 sm:text-base md:text-lg">
+                Dispatch
               </h2>
             </div>
           </div>
@@ -567,16 +636,16 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
               type="button"
               onClick={handleClose}
               title="Close and Reset"
-              className="w-8 h-8 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 flex items-center justify-center transition cursor-pointer"
+              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition cursor-pointer"
             >
-              <X className="w-5 h-5" />
+              <span>Close</span>
             </button>
           </div>
         </div>
 
         {/* Quick Paste Booking Drawer */}
         {isPasteDrawerOpen && (
-          <div className="mx-4 sm:mx-6 mt-3 p-4 bg-amber-50/70 border-2 border-amber-300/80 rounded-2xl space-y-3 animate-in fade-in slide-in-from-top-2">
+          <div className="mx-4 sm:mx-6 mt-3 p-4 bg-amber-50/70 border-2 border-amber-300/80 rounded-2xl space-y-3 animate-in fade-in slide-in-from-top-2 min-[768px]:max-[1024px]:mx-auto min-[768px]:max-[1024px]:w-full min-[768px]:max-[1024px]:max-w-2xl lg:mx-auto lg:w-full lg:max-w-3xl">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-amber-600" />
@@ -611,7 +680,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
 
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <span className="text-[11px] text-slate-500">
-                Auto-detects phone, pickup, drop, rental package, vehicle & fare.
+                Detects booking fields automatically.
               </span>
               <div className="flex items-center gap-2 ml-auto">
                 <button
@@ -645,7 +714,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
 
         {/* Paste Success Notice */}
         {pasteNotice && (
-          <div className="mx-4 sm:mx-6 mt-2 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center justify-between animate-in fade-in">
+          <div className="mx-4 sm:mx-6 mt-2 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center justify-between animate-in fade-in min-[768px]:max-[1024px]:mx-auto min-[768px]:max-[1024px]:w-full min-[768px]:max-[1024px]:max-w-2xl lg:mx-auto lg:w-full lg:max-w-3xl">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
               <span>{pasteNotice}</span>
@@ -662,7 +731,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
 
         {/* Inline Error Notice */}
         {errorMessage && (
-          <div className="mx-5 sm:mx-7 mt-3 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center justify-between">
+          <div className="mx-5 sm:mx-7 mt-3 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center justify-between min-[768px]:max-[1024px]:mx-auto min-[768px]:max-[1024px]:w-full min-[768px]:max-[1024px]:max-w-2xl lg:mx-auto lg:w-full lg:max-w-3xl">
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
               <span>{errorMessage}</span>
@@ -677,15 +746,15 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
           </div>
         )}
 
-        {/* Mobile Step-by-Step Navigation Bar (Visible only on mobile screens < lg) */}
-        <div className="lg:hidden px-3 sm:px-4 py-2 bg-slate-100/95 border-b border-slate-200 shrink-0 select-none">
-          <div className="grid grid-cols-4 gap-1 sm:gap-1.5">
+        {/* Step Navigation */}
+        <div className="sticky top-0 z-40 shrink-0 select-none border-b border-slate-200 bg-white px-2 sm:px-4 pt-1.5 lg:hidden">
+          <div className="grid grid-cols-4">
             {[
-              { step: 1, title: 'Passenger', icon: User },
-              { step: 2, title: 'Route', icon: MapPin },
-              { step: 3, title: 'Fare', icon: Car },
-              { step: 4, title: 'Dispatch', icon: Zap },
-            ].map(({ step, title, icon: Icon }) => {
+              { step: 1, title: 'Ride & Route' },
+              { step: 2, title: 'Vehicle & Fare' },
+              { step: 3, title: 'Passenger' },
+              { step: 4, title: 'Dispatch' },
+            ].map(({ step, title }) => {
               const isActive = mobileStep === step;
               const isCompleted = mobileStep > step;
               return (
@@ -693,31 +762,21 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                   key={step}
                   type="button"
                   onClick={() => setMobileStep(step as 1 | 2 | 3 | 4)}
-                  className={`py-1.5 px-1 rounded-xl transition flex flex-col items-center justify-center text-center cursor-pointer min-h-[44px] ${
+                  className={`min-w-0 border-b-2 px-1 py-1.5 transition flex flex-col items-center justify-center gap-0.5 text-center cursor-pointer ${
                     isActive
-                      ? 'bg-amber-500 text-slate-950 font-black shadow-xs ring-2 ring-amber-500/30'
+                      ? 'border-amber-500 text-slate-950 font-bold'
                       : isCompleted
-                      ? 'bg-emerald-50 text-emerald-800 font-bold border border-emerald-200/80 hover:bg-emerald-100/60'
-                      : 'bg-white text-slate-600 font-medium border border-slate-200 hover:bg-slate-50'
+                      ? 'border-amber-200 text-slate-950 font-medium hover:text-slate-700'
+                      : 'border-transparent text-slate-400 font-medium hover:text-slate-600'
                   }`}
                 >
-                  <div className="flex items-center gap-1">
-                    {isCompleted ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-700 stroke-[3]" />
-                    ) : (
-                      <span
-                        className={`text-[10px] w-3.5 h-3.5 rounded-full flex items-center justify-center font-bold ${
-                          isActive
-                            ? 'bg-slate-950 text-amber-400'
-                            : 'bg-slate-200 text-slate-700'
-                        }`}
-                      >
-                        {step}
-                      </span>
-                    )}
-                    <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-slate-950' : isCompleted ? 'text-emerald-700' : 'text-slate-400'}`} />
-                  </div>
-                  <span className="text-[10px] font-bold leading-tight truncate mt-0.5">
+                  <span
+                    data-step={String(step).padStart(2, '0')}
+                    className="text-[0px] leading-none before:content-[attr(data-step)] before:text-[9px] before:font-semibold before:tracking-[0.08em]"
+                  >
+                    {isCompleted ? '✓' : step}
+                  </span>
+                  <span className="max-w-full break-words text-[10px] font-semibold leading-tight sm:text-xs">
                     {title}
                   </span>
                 </button>
@@ -740,97 +799,53 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
               }
             }
           }}
-          className="flex-1 overflow-y-auto p-3 sm:p-5 md:p-6 pb-28 lg:pb-6 grid grid-cols-1 lg:grid-cols-12 gap-3.5 sm:gap-4.5"
+          className={`w-full p-3 sm:p-4 md:p-5 min-[768px]:max-[1024px]:mx-auto min-[768px]:max-[1024px]:max-w-3xl min-[768px]:max-[1024px]:px-6 lg:flex-1 lg:p-0 ${mobileStep === 1 ? 'pb-0' : 'pb-28'} lg:pb-0 grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-[minmax(0,42fr)_minmax(0,58fr)] gap-3 sm:gap-4 lg:gap-0 lg:overflow-hidden lg:min-h-0`}
         >
-          {/* LEFT COLUMN: Main Form Sections (8 cols on lg) */}
-          <div className="lg:col-span-8 space-y-3.5 sm:space-y-4">
+          {/* Active step content. Steps 1-3 are centered; Step 4 shares space with the summary. */}
+          <div className="lg:col-span-1 lg:mx-auto lg:h-full lg:min-h-0 lg:w-full lg:max-w-[720px] lg:overflow-y-auto lg:overflow-x-hidden lg:p-5 xl:p-6 grid grid-cols-1 gap-3 sm:gap-4 lg:gap-4 items-start w-full">
 
             {/* STEP 1 (Mobile): Ride Type & Passenger Details */}
-            <div className={`space-y-3.5 sm:space-y-4 ${mobileStep === 1 ? 'block' : 'hidden lg:block'}`}>
+            <div className={`space-y-3.5 sm:space-y-4 xl:space-y-3 lg:contents lg:space-y-0 ${mobileStep === 1 || mobileStep === 3 ? 'block lg:contents' : 'hidden lg:contents'}`}>
 
               {/* SECTION 1: Ride Type Selection */}
-              <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3">
+              <div className={`bg-white p-3 sm:p-4 rounded-xl border border-slate-200 shadow-sm space-y-3 lg:order-1 lg:p-4 ${mobileStep === 1 ? 'block' : 'hidden lg:block'}`}>
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-xs sm:text-sm font-bold text-slate-900">Ride Type</h3>
-                  <p className="text-[11px] sm:text-xs text-slate-500">Choose the trip model for this booking</p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 sm:gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => handleTripTypeChange('REGULAR')}
-                  className={`p-2.5 sm:p-3.5 rounded-xl border text-left transition flex items-start justify-between gap-2 cursor-pointer min-h-[64px] ${
+                  className={`min-h-12 w-full rounded-lg border px-3 text-left transition cursor-pointer ${
                     tripType === 'REGULAR'
-                      ? 'border-amber-500 bg-amber-50/40 ring-2 ring-amber-500/20'
-                      : 'border-slate-200 hover:border-slate-300 bg-white'
+                      ? 'border-amber-500 bg-amber-50 text-slate-950 shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-900 hover:border-slate-300'
                   }`}
                 >
-                  <div className="flex items-start gap-2 sm:gap-3 min-w-0">
-                    <div
-                      className={`w-7 h-7 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                        tripType === 'REGULAR' ? 'bg-amber-500 text-slate-950' : 'bg-slate-100 text-slate-600'
-                      }`}
-                    >
-                      <Navigation className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs sm:text-sm font-bold text-slate-900 leading-tight">Regular Ride</div>
-                      <div className="text-[10px] sm:text-[11px] text-slate-500 leading-tight mt-0.5">Point-to-point drop</div>
-                    </div>
-                  </div>
-                  <div
-                    className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 mt-0.5 ${
-                      tripType === 'REGULAR'
-                        ? 'border-amber-500 bg-amber-500 text-slate-950'
-                        : 'border-slate-300'
-                    }`}
-                  >
-                    {tripType === 'REGULAR' && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                  </div>
+                  <span className="block break-words text-xs font-bold leading-tight sm:text-sm">Regular Ride</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleTripTypeChange('PACKAGE')}
-                  className={`p-2.5 sm:p-3.5 rounded-xl border text-left transition flex items-start justify-between gap-2 cursor-pointer min-h-[64px] ${
+                  className={`min-h-12 w-full rounded-lg border px-3 text-left transition cursor-pointer ${
                     tripType === 'PACKAGE'
-                      ? 'border-purple-600 bg-purple-50/40 ring-2 ring-purple-600/20'
-                      : 'border-slate-200 hover:border-slate-300 bg-white'
+                      ? 'border-amber-500 bg-amber-50 text-slate-950 shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-900 hover:border-slate-300'
                   }`}
                 >
-                  <div className="flex items-start gap-2 sm:gap-3 min-w-0">
-                    <div
-                      className={`w-7 h-7 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                        tripType === 'PACKAGE' ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600'
-                      }`}
-                    >
-                      <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs sm:text-sm font-bold text-slate-900 leading-tight">Rental Package</div>
-                      <div className="text-[10px] sm:text-[11px] text-slate-500 leading-tight mt-0.5">Hourly package</div>
-                    </div>
-                  </div>
-                  <div
-                    className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 mt-0.5 ${
-                      tripType === 'PACKAGE'
-                        ? 'border-purple-600 bg-purple-600 text-white'
-                        : 'border-slate-300'
-                    }`}
-                  >
-                    {tripType === 'PACKAGE' && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                  </div>
+                  <span className="block break-words text-xs font-bold leading-tight sm:text-sm">Rental Package</span>
                 </button>
               </div>
             </div>
 
             {/* SECTION 2: Passenger & Contact Info */}
-            <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3">
+            <div className={`rounded-none border-0 bg-transparent p-0 shadow-none space-y-3 lg:order-4 lg:rounded-xl lg:border lg:border-slate-200 lg:bg-white lg:p-4 lg:shadow-sm ${mobileStep === 3 ? 'block' : 'hidden lg:block'}`}>
               <div>
-                <h3 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                  <User className="w-4 h-4 text-slate-600" />
+                <h3 className="text-xs sm:text-sm font-bold text-slate-900">
                   Passenger Information
                 </h3>
               </div>
@@ -845,7 +860,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                     placeholder="e.g. Passenger Name"
                     value={customerName}
                     onChange={(e) => setCustomerName(e.target.value)}
-                    className="w-full h-11 bg-white border border-slate-200 rounded-xl px-3.5 text-xs sm:text-sm font-medium text-slate-900 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 focus:outline-none transition shadow-2xs"
+                    className="h-10 lg:h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-900 shadow-2xs transition focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 sm:text-sm lg:rounded-xl lg:px-3.5"
                   />
                 </div>
 
@@ -853,7 +868,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Phone Number <span className="text-slate-400 font-normal">(Optional)</span>
                   </label>
-                  <div className="h-11 relative flex items-center bg-white border border-slate-200 rounded-xl focus-within:border-amber-500 focus-within:ring-2 focus-within:ring-amber-500/20 transition shadow-2xs overflow-hidden">
+                  <div className="relative flex h-10 lg:h-11 items-center overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xs transition focus-within:border-amber-500 focus-within:ring-2 focus-within:ring-amber-500/20 lg:rounded-xl">
                     <div className="pl-3 pr-2.5 flex items-center gap-1 border-r border-slate-100 text-slate-600 text-xs font-semibold shrink-0">
                       <span>+91</span>
                     </div>
@@ -862,7 +877,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                       placeholder="98000 00000"
                       value={customerPhone}
                       onChange={(e) => setCustomerPhone(e.target.value)}
-                      className="w-full h-full bg-transparent px-3 text-xs sm:text-sm font-mono font-medium text-slate-900 focus:outline-none"
+                      className="h-full w-full bg-transparent px-3 text-xs font-mono font-medium text-slate-900 focus:outline-none sm:text-sm"
                     />
                   </div>
                 </div>
@@ -872,15 +887,15 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-0.5">
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-semibold text-slate-700 flex items-center gap-1">
-                      <KeyRound className="w-3.5 h-3.5 text-amber-600" /> Start OTP
+                    <label className="text-xs font-semibold text-slate-700">
+                      Start OTP
                     </label>
                     <button
                       type="button"
                       onClick={regenerateOtp}
-                      className="text-[10px] text-amber-700 hover:underline font-bold flex items-center gap-0.5 cursor-pointer"
+                      className="text-[10px] text-amber-700 hover:underline font-bold cursor-pointer"
                     >
-                      <RotateCcw className="w-2.5 h-2.5" /> {otp ? 'New' : 'Generate'}
+                      {otp ? 'New' : 'Generate'}
                     </button>
                   </div>
                   <input
@@ -889,20 +904,20 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                     onChange={(e) => setOtp(e.target.value)}
                     maxLength={6}
                     placeholder="Optional OTP"
-                    className="w-full h-11 bg-white border border-slate-200 rounded-xl px-3 text-sm font-mono font-bold text-center text-slate-900 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 focus:outline-none shadow-2xs"
+                    className="h-10 lg:h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-mono font-bold text-left text-slate-900 shadow-2xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 lg:rounded-xl lg:text-center"
                   />
                 </div>
 
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Trip Notes / Special Instructions <span className="text-slate-400 font-normal">(Optional)</span>
+                    Notes <span className="text-slate-400 font-normal">(Optional)</span>
                   </label>
                   <input
                     type="text"
                     placeholder="Notes..."
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
-                    className="w-full h-11 bg-white border border-slate-200 rounded-xl px-3.5 text-xs sm:text-sm text-slate-900 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 focus:outline-none shadow-2xs"
+                    className="h-10 lg:h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-900 shadow-2xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 sm:text-sm lg:rounded-xl lg:px-3.5"
                   />
                 </div>
               </div>
@@ -921,22 +936,24 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
           </div>
 
           {/* STEP 2 (Mobile): Route & Locations */}
-          <div className={`space-y-3.5 sm:space-y-4 ${mobileStep === 2 ? 'block' : 'hidden lg:block'}`}>
+          <div className={`space-y-3 sm:space-y-3.5 xl:space-y-3 lg:col-span-1 lg:order-2 ${mobileStep === 1 ? 'block lg:block' : 'hidden lg:block'}`}>
 
             {/* SECTION 3: Route & Locations (Clean Google Places Autocomplete) */}
-            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3.5">
+            <div
+              className="flex min-w-0 flex-col gap-2.5 lg:contents"
+              style={{ minHeight: `calc(100dvh - 220px - ${mobileActionBarHeight}px + 9px)` }}
+            >
+              <div className={`relative z-30 space-y-2.5 lg:col-span-1 lg:rounded-xl lg:border lg:border-slate-200 lg:bg-white lg:p-4 lg:shadow-sm ${mobileStep === 1 ? 'block' : 'hidden lg:block'}`}>
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                    <MapPin className="w-4 h-4 text-emerald-600" />
-                    Trip Route & Location
+                  <h3 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                     Route
                   </h3>
-                  <p className="text-xs text-slate-500"></p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setShowCoordinates(!showCoordinates)}
-                  className="text-[11px] text-amber-700 hover:text-amber-800 font-semibold flex items-center gap-1 cursor-pointer"
+                  className="min-h-[32px] text-[11px] text-amber-700 hover:text-amber-800 font-semibold flex items-center gap-1 cursor-pointer"
                 >
                   <Compass className="w-3 h-3" />
                   {showCoordinates ? 'Hide GPS Lat/Lng' : 'GPS Lat/Lng'}
@@ -958,6 +975,9 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                 pinColor="emerald"
                 iconType="pickup"
                 required={false}
+                className="[&>div:nth-child(2)]:min-h-[44px]"
+                suggestionGroup="new-trip-route"
+                isActive={mobileStep === 1}
               />
 
               {showCoordinates && (
@@ -1002,6 +1022,9 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                 pinColor="rose"
                 iconType="drop"
                 required={false}
+                className="[&>div:nth-child(2)]:min-h-[44px]"
+                suggestionGroup="new-trip-route"
+                isActive={mobileStep === 1}
               />
 
               {showCoordinates && (
@@ -1031,8 +1054,13 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                 </div>
               )}
 
+              </div>
+
               {/* Big, Clear & Responsive Route Map */}
               <RouteMapPreview
+                className="relative z-0 flex min-h-0 min-w-0 flex-1 flex-col rounded-xl lg:fixed lg:top-16 lg:right-0 lg:z-20 lg:h-[calc(100dvh-4rem)] lg:w-1/2 lg:min-h-0 lg:overflow-hidden lg:rounded-none lg:border-0 xl:left-[42%] xl:w-auto"
+                minimalOverlays
+                fillContainer
                 pickupLocation={pickupLocation}
                 pickupLat={pickupLat ? Number(pickupLat) : undefined}
                 pickupLng={pickupLng ? Number(pickupLng) : undefined}
@@ -1061,25 +1089,25 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
           </div>
 
           {/* STEP 3 (Mobile): Vehicle Category & Pricing */}
-          <div className={`space-y-3.5 sm:space-y-4 ${mobileStep === 3 ? 'block' : 'hidden lg:block'}`}>
+          <div className={`space-y-3.5 sm:space-y-4 xl:space-y-3 lg:col-span-1 lg:order-3 ${mobileStep === 2 ? 'block lg:block' : 'hidden lg:block'}`}>
 
             {/* SECTION 4: Vehicle Category & Pricing */}
-            <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3">
+            <div className="rounded-none border-0 bg-transparent p-0 shadow-none space-y-3 lg:rounded-xl lg:border lg:border-slate-200 lg:bg-white lg:p-4 lg:shadow-sm">
               <div>
-                <h3 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                  <Calculator className="w-4 h-4 text-amber-600" />
-                  Vehicle Category & Pricing
+                <h3 className="text-xs sm:text-sm font-bold text-slate-900">
+                  Vehicle & Fare
                 </h3>
               </div>
 
               {/* Category Dropdown */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Vehicle Category</label>
-                <select
-                  value={vehicleCategory}
-                  onChange={(e) => handleCategoryChange(e.target.value as VehicleCategory)}
-                  className="w-full h-11 border border-slate-200 rounded-xl px-3.5 text-xs sm:text-sm text-slate-900 bg-white font-bold focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 focus:outline-none transition shadow-2xs"
-                >
+                <label className="mb-1 block text-[11px] sm:text-xs font-semibold text-slate-700">Vehicle Category</label>
+                <div className="relative">
+                  <select
+                    value={vehicleCategory}
+                    onChange={(e) => handleCategoryChange(e.target.value as VehicleCategory)}
+                    className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 pr-10 text-xs font-semibold text-slate-900 shadow-sm transition focus:border-[#FF9800] focus:outline-none focus:ring-2 focus:ring-[#FF9800]/20 sm:text-sm"
+                  >
                   <option value="MINI">MINI</option>
                   <option value="SEDAN">SEDAN</option>
                   <option value="SUV">SUV</option>
@@ -1087,19 +1115,24 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                   <option value="INNOVA">INNOVA</option>
                   <option value="INNOVA CRYSTA">INNOVA CRYSTA</option>
                   <option value="CUSTOM">Custom Vehicle Type...</option>
-                </select>
+                  </select>
+                  <ChevronDown
+                    aria-hidden="true"
+                    className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+                  />
+                </div>
 
                 {vehicleCategory === 'CUSTOM' && (
                   <div className="mt-2.5">
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Enter Custom Vehicle Name / Type
+                      Custom Vehicle Name
                     </label>
                     <input
                       type="text"
                       value={customVehicleName}
                       onChange={(e) => setCustomVehicleName(e.target.value)}
-                      placeholder="e.g. Tempo Traveller, Force Urbania, Van, Mini Bus..."
-                      className="w-full h-11 border border-amber-400 bg-amber-50/50 rounded-xl px-3.5 text-xs sm:text-sm text-slate-900 font-bold placeholder:font-normal placeholder:text-slate-400 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 focus:outline-none shadow-2xs"
+                      placeholder="Enter custom vehicle name"
+                      className="h-11 lg:h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-900 shadow-2xs placeholder:font-normal placeholder:text-slate-400 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 sm:text-sm"
                       autoFocus
                     />
                   </div>
@@ -1108,9 +1141,9 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
 
               {/* REGULAR FARE INPUTS: 2x2 grid on mobile, 4 columns on sm+ */}
               {tripType === 'REGULAR' ? (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 pt-0.5">
+                <div className="grid grid-cols-2 gap-2 pt-0.5 sm:grid-cols-4 sm:gap-2.5">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1 truncate">
+                    <label className="mb-1 block break-words text-xs font-semibold leading-tight text-slate-700">
                       Base Fare (₹)
                     </label>
                     <input
@@ -1125,12 +1158,12 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                         }
                       }}
                       onWheel={(e) => e.currentTarget.blur()}
-                      className="w-full h-11 border border-slate-200 rounded-xl px-3 text-xs sm:text-sm font-bold text-slate-900 bg-white focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 focus:outline-none shadow-2xs"
+                      className="h-11 lg:h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-900 shadow-2xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 sm:text-sm"
                       placeholder="150"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1 truncate">
+                    <label className="mb-1 block break-words text-xs font-semibold leading-tight text-slate-700">
                       KM Rate (₹/km)
                     </label>
                     <input
@@ -1145,12 +1178,12 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                         }
                       }}
                       onWheel={(e) => e.currentTarget.blur()}
-                      className="w-full h-11 border border-slate-200 rounded-xl px-3 text-xs sm:text-sm font-bold text-slate-900 bg-white focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 focus:outline-none shadow-2xs"
+                      className="h-11 lg:h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-900 shadow-2xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 sm:text-sm"
                       placeholder="28"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1 truncate">
+                    <label className="mb-1 block break-words text-xs font-semibold leading-tight text-slate-700">
                       Distance (km)
                     </label>
                     <input
@@ -1166,11 +1199,11 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                       }}
                       onWheel={(e) => e.currentTarget.blur()}
                       placeholder="e.g. 37.2"
-                      className="w-full h-11 border border-slate-200 rounded-xl px-3 text-xs sm:text-sm font-bold text-slate-900 bg-white focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 focus:outline-none shadow-2xs"
+                      className="h-11 lg:h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-900 shadow-2xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 sm:text-sm"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-amber-950 mb-1 truncate">
+                      <label className="mb-1 block break-words text-xs font-semibold leading-tight text-slate-700">
                       Total Fare (₹)
                     </label>
                     <input
@@ -1185,16 +1218,16 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                         }
                       }}
                       onWheel={(e) => e.currentTarget.blur()}
-                      className="w-full h-11 border border-amber-400 rounded-xl px-3 text-xs sm:text-sm font-black text-amber-950 bg-amber-50/70 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 focus:outline-none shadow-2xs"
+                      className="h-11 lg:h-10 w-full rounded-lg border border-amber-200 bg-amber-50/70 px-3 text-xs font-bold text-slate-900 shadow-2xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 sm:text-sm"
                     />
                   </div>
                 </div>
               ) : (
                 /* PACKAGE FARE INPUTS */
                 <div className="space-y-3 pt-0.5">
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
+                  <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 lg:grid-cols-5">
                     <div>
-                      <label className="block text-xs font-semibold text-purple-950 mb-1 truncate">
+                      <label className="mb-1 block break-words text-xs font-semibold leading-tight text-slate-700">
                         Hour Rate (₹/hr)
                       </label>
                       <input
@@ -1215,13 +1248,13 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                           }
                         }}
                         onWheel={(e) => e.currentTarget.blur()}
-                        className="w-full h-11 border border-slate-200 rounded-xl px-3 text-xs sm:text-sm font-bold text-slate-900 bg-white focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 focus:outline-none shadow-2xs"
+                        className="h-11 lg:h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-900 shadow-2xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 sm:text-sm"
                         placeholder="e.g. 140"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-purple-950 mb-1 truncate">
+                      <label className="mb-1 block break-words text-xs font-semibold leading-tight text-slate-700">
                         Hours
                       </label>
                       <input
@@ -1242,13 +1275,13 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                           }
                         }}
                         onWheel={(e) => e.currentTarget.blur()}
-                        className="w-full h-11 border border-slate-200 rounded-xl px-3 text-xs sm:text-sm font-bold text-slate-900 bg-white focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 focus:outline-none shadow-2xs"
+                        className="h-11 lg:h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-900 shadow-2xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 sm:text-sm"
                         placeholder="e.g. 4"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-purple-950 mb-1 truncate">
+                      <label className="mb-1 block break-words text-xs font-semibold leading-tight text-slate-700">
                         KM Rate (₹/km)
                       </label>
                       <input
@@ -1269,13 +1302,13 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                           }
                         }}
                         onWheel={(e) => e.currentTarget.blur()}
-                        className="w-full h-11 border border-slate-200 rounded-xl px-3 text-xs sm:text-sm font-bold text-slate-900 bg-white focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 focus:outline-none shadow-2xs"
+                        className="h-11 lg:h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-900 shadow-2xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 sm:text-sm"
                         placeholder="e.g. 15"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-purple-950 mb-1 truncate">
+                      <label className="mb-1 block break-words text-xs font-semibold leading-tight text-slate-700">
                         Package KMs
                       </label>
                       <input
@@ -1296,13 +1329,13 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                           }
                         }}
                         onWheel={(e) => e.currentTarget.blur()}
-                        className="w-full h-11 border border-slate-200 rounded-xl px-3 text-xs sm:text-sm font-bold text-slate-900 bg-white focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 focus:outline-none shadow-2xs"
+                        className="h-11 lg:h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-900 shadow-2xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 sm:text-sm"
                         placeholder="e.g. 40"
                       />
                     </div>
 
                     <div className="col-span-2 sm:col-span-1">
-                      <label className="block text-xs font-bold text-purple-950 mb-1 truncate">
+                      <label className="mb-1 block break-words text-xs font-bold leading-tight text-slate-700">
                         Total Fare (₹)
                       </label>
                       <input
@@ -1317,16 +1350,17 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                           }
                         }}
                         onWheel={(e) => e.currentTarget.blur()}
-                        className="w-full h-11 border border-purple-400 rounded-xl px-3 text-xs sm:text-sm font-black text-purple-950 bg-purple-50/70 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 focus:outline-none shadow-2xs"
+                        className="h-11 lg:h-10 w-full rounded-lg border border-amber-200 bg-amber-50/70 px-3 text-xs font-bold text-slate-900 shadow-2xs focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 sm:text-sm"
                       />
                     </div>
                   </div>
 
                   {/* Calculation Mode */}
-                  <div className="bg-purple-50/50 border border-purple-100 rounded-xl p-3 flex items-center justify-between flex-wrap gap-2 text-xs">
-                    <label className="flex items-center gap-2 text-purple-950 font-semibold cursor-pointer select-none">
+                  <div className="space-y-1 pt-1 text-xs">
+                    <label className="flex min-h-[44px] items-center gap-2 text-slate-700 font-semibold cursor-pointer select-none">
                       <input
                         type="checkbox"
+                        aria-label="Include KM Charges in Total"
                         checked={includeKmInPackageTotal}
                         onChange={(e) => {
                           const checked = e.target.checked;
@@ -1339,12 +1373,12 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                             checked
                           );
                         }}
-                        className="rounded text-purple-600 focus:ring-purple-500"
+                        className="h-4 w-4 rounded text-amber-600 focus:ring-amber-500"
                       />
-                      <span>Include KMs in total fare (Hours × Rate + KMs × Rate)</span>
+                      <span>Include KM Charges in Total</span>
                     </label>
 
-                    <span className="font-mono font-bold text-purple-800">
+                    <span className="block text-[11px] font-semibold text-slate-900">
                       Calculated: ₹{
                         includeKmInPackageTotal
                           ? (Number(hourFare) || 0) * (Number(packageHours) || 0) +
@@ -1359,31 +1393,29 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
           </div>
 
           {/* STEP 4 (Mobile): Dispatch Mode & Driver Allocation */}
-          <div className={`space-y-3.5 sm:space-y-4 ${mobileStep === 4 ? 'block' : 'hidden lg:block'}`}>
+          <div className={`space-y-3.5 sm:space-y-4 xl:space-y-3 lg:col-span-1 lg:order-5 ${mobileStep === 4 ? 'block lg:block' : 'hidden lg:block'}`}>
 
             {/* SECTION 5: Dispatch Mode & Driver Allocation */}
-            <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3">
+            <div className="rounded-none border-0 bg-transparent p-0 shadow-none space-y-3.5 lg:rounded-xl lg:border lg:border-slate-200 lg:bg-white lg:p-4 lg:shadow-sm">
               <div>
                 <h3 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                  <Sliders className="w-4 h-4 text-sky-600" />
-                  Dispatch Mode & Driver Allocation
+                   Dispatch
                 </h3>
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
+              <div className="grid grid-cols-1 min-[360px]:grid-cols-2 gap-2.5 sm:gap-3">
                 <button
                   type="button"
                   onClick={() => setDispatchType('RADIUS')}
                   className={`p-2.5 sm:p-3 rounded-xl border flex items-center gap-2 sm:gap-2.5 transition cursor-pointer text-left min-h-[58px] ${
                     dispatchType === 'RADIUS'
-                      ? 'bg-sky-600 text-white border-sky-700 font-bold shadow-xs'
+                      ? 'bg-amber-50 text-amber-950 border-amber-500 font-bold shadow-xs ring-1 ring-amber-500/15'
                       : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 font-medium'
                   }`}
                 >
-                  <Radio className={`w-4 h-4 shrink-0 ${dispatchType === 'RADIUS' ? 'text-white' : 'text-sky-600'}`} />
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold leading-tight truncate">RADIUS GEOFENCE</div>
-                    <div className={`text-[10px] truncate ${dispatchType === 'RADIUS' ? 'text-sky-100' : 'text-slate-500'}`}>
+                   <div className="min-w-0">
+                    <div className="break-words text-xs font-bold leading-tight">RADIUS GEOFENCE</div>
+                    <div className={`break-words text-[10px] leading-tight ${dispatchType === 'RADIUS' ? 'text-amber-950' : 'text-slate-500'}`}>
                       Nearby within {radiusKms || 5} km
                     </div>
                   </div>
@@ -1394,14 +1426,13 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                   onClick={() => setDispatchType('BROADCAST')}
                   className={`p-2.5 sm:p-3 rounded-xl border flex items-center gap-2 sm:gap-2.5 transition cursor-pointer text-left min-h-[58px] ${
                     dispatchType === 'BROADCAST'
-                      ? 'bg-amber-500 text-slate-950 border-amber-600 font-bold shadow-xs'
+                      ? 'bg-amber-50 text-amber-950 border-amber-500 font-bold shadow-xs ring-1 ring-amber-500/15'
                       : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 font-medium'
                   }`}
                 >
-                  <Zap className={`w-4 h-4 shrink-0 ${dispatchType === 'BROADCAST' ? 'fill-slate-950 text-slate-950' : 'text-amber-500'}`} />
                   <div className="min-w-0">
-                    <div className="text-xs font-bold leading-tight truncate">BROADCAST</div>
-                    <div className={`text-[10px] truncate ${dispatchType === 'BROADCAST' ? 'text-slate-900' : 'text-slate-500'}`}>
+                    <div className="break-words text-xs font-bold leading-tight">BROADCAST</div>
+                    <div className={`break-words text-[10px] leading-tight ${dispatchType === 'BROADCAST' ? 'text-slate-900' : 'text-slate-500'}`}>
                       All online fleet
                     </div>
                   </div>
@@ -1409,107 +1440,118 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
               </div>
 
               {dispatchType === 'RADIUS' && (
-                <div className="bg-sky-50/50 p-3 rounded-xl border border-sky-100 space-y-2">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-slate-700">Dispatch Search Radius:</span>
+                <div className="space-y-2.5 pt-1 lg:rounded-xl lg:border lg:border-slate-200 lg:bg-white lg:p-3">
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="font-semibold text-slate-800">Search Radius</span>
                     <div className="flex items-center gap-1">
                       <input
                         type="number"
                         min="1"
-                        max="100"
+                        max="10"
                         value={radiusKms}
                         onChange={(e) => setRadiusKms(e.target.value)}
-                        className="w-14 text-center font-bold font-mono text-slate-900 border border-slate-300 rounded-lg px-1.5 py-0.5 bg-white text-xs"
+                        className="w-14 h-10 text-center font-bold font-mono text-slate-900 border border-slate-300 rounded-lg px-1.5 bg-white text-sm"
                       />
-                      <span className="font-bold text-sky-800">km</span>
+                      <span className="font-bold text-amber-800">km</span>
                     </div>
                   </div>
 
-                  <input
-                    type="range"
-                    min="1"
-                    max="50"
-                    step="1"
-                    value={radiusKms}
-                    onChange={(e) => setRadiusKms(e.target.value)}
-                    className="w-full accent-sky-600 h-1.5 bg-slate-200 rounded-lg cursor-pointer"
-                  />
-
-                  {/* Quick Radius Presets - 3 columns on mobile, flexible row on sm+ */}
-                  <div className="grid grid-cols-3 sm:flex sm:flex-wrap gap-1.5 pt-1">
-                    {[3, 5, 8, 10, 15, 25].map((preset) => (
+                  <div className="grid grid-cols-4 gap-2 pt-0.5">
+                    {[3, 5, 8, 10].map((preset) => (
                       <button
                         key={preset}
                         type="button"
                         onClick={() => setRadiusKms(String(preset))}
-                        className={`py-1.5 px-2 rounded-lg text-[11px] font-bold transition cursor-pointer text-center ${
+                        className={`min-h-[44px] py-2 px-3 rounded-xl text-xs font-bold transition cursor-pointer text-center border ${
                           Number(radiusKms) === preset
-                            ? 'bg-sky-600 text-white shadow-xs'
-                            : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                            ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-xs'
+                            : 'bg-white border-slate-200 text-slate-700 hover:bg-amber-50 hover:border-amber-300'
                         }`}
                       >
-                        {preset} km{preset === 5 ? ' ★' : ''}
+                          {preset} km
                       </button>
                     ))}
                   </div>
                 </div>
               )}
 
-              <DriverSearchSelect
-                drivers={drivers}
-                selectedDriverId={assignedDriverId}
-                onSelect={setAssignedDriverId}
-                dispatchType={dispatchType}
-                onDispatchTypeChange={setDispatchType}
-                radiusKms={radiusKms}
-                onRadiusChange={setRadiusKms}
-                pickupLat={pickupLat ? Number(pickupLat) : undefined}
-                pickupLng={pickupLng ? Number(pickupLng) : undefined}
-                pickupLocation={pickupLocation}
-                trips={trips}
-                label="Direct Driver Assignment"
-              />
+              <div className="relative z-20 space-y-2">
+                {isDriverSelectionOpen ? (
+                  <DriverSearchSelect
+                    drivers={drivers}
+                    selectedDriverId={assignedDriverId}
+                    onSelect={setAssignedDriverId}
+                    dispatchType={dispatchType}
+                    onDispatchTypeChange={setDispatchType}
+                    radiusKms={radiusKms}
+                    onRadiusChange={setRadiusKms}
+                    pickupLat={pickupLat ? Number(pickupLat) : undefined}
+                    pickupLng={pickupLng ? Number(pickupLng) : undefined}
+                    pickupLocation={pickupLocation}
+                    trips={trips}
+                    selectionPage
+                    onBack={() => setIsDriverSelectionOpen(false)}
+                    onConfirm={() => setIsDriverSelectionOpen(false)}
+                    onAvailableCountChange={setNearbyDriverCount}
+                  />
+                ) : (
+                  <div className="rounded-none border-0 bg-transparent p-0 shadow-none lg:rounded-xl lg:border lg:border-slate-200 lg:bg-white lg:p-3 lg:shadow-sm">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <h4 className="text-sm font-bold text-slate-900">Direct Driver Assignment</h4>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {nearbyDriverCount ?? drivers.filter((driver) => driver.status === 'ACTIVE' && driver.is_online).length} available drivers · {radiusKms} km radius
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsDriverSelectionOpen(true)}
+                        className="min-h-[44px] w-full rounded-xl border border-amber-500 bg-white px-4 text-sm font-bold text-amber-700 transition hover:bg-amber-50 sm:w-auto"
+                      >
+                        Select Driver
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
-        </div>
-
-        {/* RIGHT COLUMN: Sticky Trip Summary & Publish Settings (Step 4 on mobile, always on desktop) */}
-        <div className={`space-y-4 lg:col-span-4 ${mobileStep === 4 ? 'block' : 'hidden lg:block'}`}>
+        {/* Trip Summary remains in the left booking panel on desktop. */}
+         <div className={`space-y-2 lg:col-span-1 lg:order-6 ${mobileStep === 4 ? 'block lg:block' : 'hidden lg:block'}`}>
             
             {/* Form Summary Card */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-4 lg:sticky lg:top-2">
+             <div className="space-y-3 lg:rounded-xl lg:border lg:border-slate-200 lg:bg-white lg:p-4 lg:shadow-sm">
               <div>
                 <h3 className="text-sm font-bold text-slate-900">Trip Summary</h3>
-                <p className="text-xs text-slate-500">Review dispatch specifications</p>
               </div>
 
-              <div className="divide-y divide-slate-100 text-xs space-y-2.5 pt-1">
-                <div className="flex items-center justify-between pt-1">
-                  <span className="text-slate-500 flex items-center gap-1.5">
-                    <User className="w-3.5 h-3.5 text-slate-400" /> Passenger
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                <div className="min-w-0">
+                    <span className="block text-slate-500">
+                    Passenger
                   </span>
-                  <span className="font-semibold text-slate-900 truncate max-w-[140px]">
+                  <span className="mt-0.5 block break-words font-semibold leading-tight text-slate-900">
                     {customerName || 'Passenger'}
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between pt-2">
-                  <span className="text-slate-500 flex items-center gap-1.5">
-                    <Car className="w-3.5 h-3.5 text-slate-400" /> Vehicle
+                <div className="min-w-0">
+                    <span className="block text-slate-500">
+                    Vehicle
                   </span>
-                  <span className="font-semibold text-slate-900 truncate max-w-[150px]">
+                  <span className="mt-0.5 block break-words font-semibold leading-tight text-slate-900">
                     {vehicleCategory === 'CUSTOM'
                       ? customVehicleName.trim() || 'Custom Vehicle'
                       : vehicleCategory}
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between pt-2">
-                  <span className="text-slate-500 flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-slate-400" /> Type
+                <div className="min-w-0">
+                    <span className="block text-slate-500">
+                    Type
                   </span>
-                  <span className="font-semibold text-slate-900">
+                  <span className="mt-0.5 block break-words font-semibold leading-tight text-slate-900">
                     {tripType === 'REGULAR'
                       ? 'Regular'
                       : packageHours && packageKms
@@ -1522,54 +1564,47 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between pt-2">
-                  <span className="text-slate-500 flex items-center gap-1.5">
-                    <Zap className="w-3.5 h-3.5 text-slate-400" /> Mode
+                <div className="min-w-0">
+                    <span className="block text-slate-500">
+                    Mode
                   </span>
-                  <span className="font-semibold text-slate-900">
+                  <span className="mt-0.5 block break-words font-semibold leading-tight text-slate-900">
                     {dispatchType === 'BROADCAST' ? 'Broadcast' : `Radius (${radiusKms}km)`}
                   </span>
                 </div>
 
                 {/* Direct Driver Profile Card in Summary */}
                 {selectedDriver ? (
-                  <div className="pt-2 pb-1">
-                    <div className="p-3 bg-gradient-to-br from-amber-50/80 to-white rounded-xl border border-amber-300 space-y-2">
+                  <div className="col-span-2 border-t border-slate-200 pt-3">
+                    <div className="space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider flex items-center gap-1">
-                          <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                           Assigned Driver
-                        </span>
-                        <span
-                          className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full ${
-                            selectedDriver.is_online
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-slate-100 text-slate-500'
-                          }`}
-                        >
-                          {selectedDriver.is_online ? 'Online' : 'Offline'}
                         </span>
                       </div>
 
                       <div className="flex items-center gap-2.5">
-                        <DriverAvatar
-                          photoUrl={selectedDriver.photo_url || selectedDriver.profile_photo_url}
-                          name={selectedDriver.driver_name}
-                          size="sm"
-                          isOnline={selectedDriver.is_online}
-                          showStatusBadge={true}
-                        />
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5 truncate font-bold text-xs text-slate-900">
-                            <span className="truncate">{selectedDriver.driver_name}</span>
-                            <span className="bg-slate-800 text-amber-400 text-[10px] font-mono px-1 py-0.2 rounded shrink-0">
-                              {selectedDriver.driver_id}
+                          <div className="flex items-center justify-between gap-2 text-xs font-bold text-slate-900">
+                            <span className="min-w-0 break-words uppercase leading-tight">{selectedDriver.driver_name}</span>
+                            <span className={`shrink-0 font-medium ${selectedDriver.is_online ? 'text-emerald-700' : 'text-slate-500'}`}>
+                              {selectedDriver.is_online ? 'Online' : 'Offline'}
                             </span>
                           </div>
-                          <div className="text-[11px] text-slate-600 font-mono flex items-center gap-1.5 mt-0.5">
-                            <span className="font-bold text-slate-700">{selectedDriver.vehicle_number}</span>
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-2 pt-1 text-[11px] text-slate-600 [&>span:nth-child(2)]:hidden">
+                            <span className="min-w-0">
+                              <span className="block text-slate-500">Driver ID</span>
+                              <strong className="block font-semibold text-slate-900">{selectedDriver.driver_id}</strong>
+                            </span>
                             <span>•</span>
-                            <span>{selectedDriver.vehicle_category}</span>
+                            <span className="min-w-0">
+                              <span className="block text-slate-500">Vehicle Category</span>
+                              <strong className="block break-words font-semibold leading-tight text-slate-900">{selectedDriver.vehicle_category || 'Not provided'}</strong>
+                            </span>
+                            <span className="col-span-2 min-w-0">
+                              <span className="block text-slate-500">Vehicle Number</span>
+                              <strong className="block font-semibold text-slate-900">{selectedDriver.vehicle_number || 'Not provided'}</strong>
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -1582,9 +1617,8 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                               ? `+91${selectedDriver.mobile_number.replace(/\D/g, '').slice(-10)}`
                               : selectedDriver.mobile_number
                           }`}
-                          className="py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-[11px] flex items-center justify-center gap-1 transition cursor-pointer shadow-2xs select-none"
+                          className="flex min-h-[42px] items-center justify-center rounded-lg bg-[#009966] px-3 text-xs font-bold text-white transition hover:bg-[#007a52] active:bg-[#006b48]"
                         >
-                          <PhoneCall className="w-3 h-3" />
                           <span>Call Driver</span>
                         </a>
                         <a
@@ -1597,68 +1631,58 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                           )}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="py-1.5 px-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-[11px] flex items-center justify-center gap-1 transition cursor-pointer select-none"
+                          className="flex min-h-[42px] items-center justify-center rounded-lg border border-[#009966] bg-white px-3 text-xs font-bold text-[#009966] transition hover:bg-emerald-50"
                         >
-                          <MessageSquare className="w-3 h-3 text-emerald-600" />
                           <span>WhatsApp</span>
                         </a>
                       </div>
                     </div>
                   </div>
                 ) : (
-                  <div className="flex items-center justify-between pt-2">
-                    <span className="text-slate-500 flex items-center gap-1.5">
-                      <ShieldCheck className="w-3.5 h-3.5 text-slate-400" /> Driver
+                  <div className="min-w-0 px-0 py-1 lg:rounded-lg lg:bg-slate-50 lg:px-2 lg:py-1.5">
+                    <span className="block text-slate-500">
+                      Driver
                     </span>
-                    <span className="font-semibold text-slate-900 truncate max-w-[140px]">
+                    <span className="mt-0.5 block break-words font-semibold leading-tight text-slate-900">
                       Auto Broadcast
                     </span>
                   </div>
                 )}
 
-                <div className="flex items-center justify-between pt-2 pb-1">
-                  <span className="text-slate-500 flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5 text-slate-400" /> Status
-                  </span>
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                    Open Ready
-                  </span>
-                </div>
               </div>
 
               {/* Total Estimated Fare Box */}
-              <div className="p-3.5 bg-amber-50/80 rounded-xl border border-amber-200 text-center">
-                <div className="text-[11px] font-bold text-amber-800 uppercase tracking-wide">
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/80 px-3 py-2">
+                <div className="text-[11px] font-bold uppercase tracking-wide text-amber-800">
                   Estimated Trip Fare
                 </div>
-                <div className="text-2xl font-black text-slate-950 mt-0.5">
+                <div className="text-lg font-black text-slate-950">
                   ₹{estimatedFare || '0'}
                 </div>
               </div>
 
               {/* Publish & Notification Settings */}
-              <div className="pt-2 border-t border-slate-100 space-y-2.5">
+              <div className="flex items-center justify-between gap-3 pt-1">
                 <div className="text-xs font-bold text-slate-800">Dispatch Settings</div>
                 
-                <label className="flex items-start gap-2 text-xs text-slate-600 cursor-pointer select-none">
+                <label className="flex min-h-[32px] items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
                   <input
                     type="checkbox"
                     checked={sendSmsNotification}
                     onChange={(e) => setSendSmsNotification(e.target.checked)}
                     className="mt-0.5 rounded text-amber-600 focus:ring-amber-500"
                   />
-                  <span>Send WhatsApp / SMS broadcast ping to active drivers</span>
+                  <span>Driver notification</span>
                 </label>
               </div>
 
               {/* Action Buttons (Visible only on desktop screens lg+, mobile uses step navigation bottom bar) */}
-              <div className="pt-3 space-y-2 hidden lg:block">
+              <div className={`pt-2 space-y-1.5 ${mobileStep === 4 ? 'block' : 'hidden'} lg:block lg:grid lg:grid-cols-[1.4fr_1fr] lg:gap-2`}>
                 <button
                   type="submit"
                   form="new-trip-form"
                   disabled={isSubmitting}
-                  className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 font-bold text-xs shadow-md hover:shadow-lg transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  className="hidden lg:flex w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 font-bold text-xs shadow-md hover:shadow-lg transition items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                 >
                   <Send className="w-4 h-4" />
                   <span>
@@ -1668,20 +1692,19 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                   </span>
                 </button>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-2 lg:contents">
                   <button
                     type="button"
                     onClick={handleClearDraft}
-                    className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-900 font-semibold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="w-full py-2 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-900 font-semibold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
                   >
-                    <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
                     <span>Reset</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={handleClose}
-                    className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 font-semibold text-xs transition cursor-pointer text-center"
+                    className="hidden lg:flex w-full py-2 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 font-semibold text-xs transition cursor-pointer text-center items-center justify-center"
                   >
                     Cancel / Back
                   </button>
@@ -1691,10 +1714,45 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
             </div>
 
           </div>
+        </div>
         </form>
 
-        {/* Sticky Mobile Step-by-Step Bottom Bar (Visible only on mobile screens < lg) */}
-        <div className="lg:hidden sticky bottom-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 px-3 py-2.5 flex items-center justify-between gap-1.5 sm:gap-2 shadow-lg">
+        {/* Desktop step actions. Final dispatch remains in the Step 4 summary. */}
+        {mobileStep === 1 && (
+          <div className="hidden items-center justify-between gap-3 px-5 pb-3">
+            <button
+              type="button"
+              onClick={handleClose}
+              className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-rose-600 font-bold text-xs transition cursor-pointer"
+            >
+              Cancel
+            </button>
+            <div className="flex items-center gap-2">
+              {mobileStep > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setMobileStep((mobileStep - 1) as 1 | 2 | 3 | 4)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs transition cursor-pointer"
+                >
+                  Back
+                </button>
+              )}
+              {mobileStep === 1 && (
+                <button
+                  type="button"
+                  onClick={() => setMobileStep(2)}
+                  className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold text-xs shadow-md transition cursor-pointer"
+                >
+                  Next: Vehicle & Fare
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Sticky Mobile Step-by-Step Bottom Bar */}
+        {!isDriverSelectionOpen && (
+          <div ref={mobileActionBarRef} className="lg:hidden fixed inset-x-0 bottom-0 z-50 bg-white/95 backdrop-blur-md border-t border-slate-200 px-3 pt-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom))] flex items-center justify-between gap-1.5 sm:gap-2 shadow-lg min-[768px]:max-[1024px]:left-1/2 min-[768px]:max-[1024px]:right-auto min-[768px]:max-[1024px]:w-full min-[768px]:max-[1024px]:max-w-3xl min-[768px]:max-[1024px]:-translate-x-1/2 min-[768px]:max-[1024px]:px-6">
           {mobileStep === 1 && (
             <>
               <button
@@ -1704,20 +1762,12 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
               >
                 Cancel
               </button>
-              <div className="min-w-0 text-center px-1 flex-1">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Step 1 of 4
-                </span>
-                <span className="text-xs font-bold text-slate-800 truncate block">
-                  {customerPhone ? customerPhone : 'Passenger Info'}
-                </span>
-              </div>
               <button
                 type="button"
                 onClick={() => setMobileStep(2)}
                 className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 font-extrabold text-xs shadow-md transition flex items-center gap-1.5 cursor-pointer min-h-[44px] shrink-0"
               >
-                <span>Next: Route</span>
+                <span>Next: Vehicle & Fare</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </>
@@ -1742,20 +1792,12 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                   <span>Back</span>
                 </button>
               </div>
-              <div className="min-w-0 text-center px-1 flex-1">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Step 2 of 4
-                </span>
-                <span className="text-xs font-bold text-emerald-700 truncate block">
-                  {distanceKm ? `${distanceKm} km` : 'Route'}
-                </span>
-              </div>
               <button
                 type="button"
                 onClick={() => setMobileStep(3)}
                 className="px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 font-extrabold text-xs shadow-md transition flex items-center gap-1.5 cursor-pointer min-h-[44px] shrink-0"
               >
-                <span>Next: Fare</span>
+                <span>Next: Passenger</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </>
@@ -1780,12 +1822,9 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                   <span>Back</span>
                 </button>
               </div>
-              <div className="min-w-0 text-center px-1 flex-1">
+              <div className="hidden">
                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Estimated Fare
-                </span>
-                <span className="text-base font-black text-slate-950 truncate block">
-                  ₹{estimatedFare || '0'}
+                  Step 3 of 4 · Fare
                 </span>
               </div>
               <button
@@ -1793,7 +1832,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                 onClick={() => setMobileStep(4)}
                 className="px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 font-extrabold text-xs shadow-md transition flex items-center gap-1.5 cursor-pointer min-h-[44px] shrink-0"
               >
-                <span>Next: Driver</span>
+                <span>Next: Dispatch</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </>
@@ -1818,14 +1857,6 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                   <span>Back</span>
                 </button>
               </div>
-              <div className="min-w-0 flex-1 px-1">
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider truncate">
-                  {selectedDriver ? selectedDriver.driver_name.split(' ')[0] : dispatchType === 'RADIUS' ? `Radius (${radiusKms}km)` : 'Broadcast'}
-                </div>
-                <div className="text-base font-black text-slate-900 leading-tight">
-                  ₹{estimatedFare || '0'}
-                </div>
-              </div>
               <button
                 type="submit"
                 form="new-trip-form"
@@ -1837,7 +1868,8 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
               </button>
             </>
           )}
-        </div>
+          </div>
+        )}
 
       </div>
     </div>

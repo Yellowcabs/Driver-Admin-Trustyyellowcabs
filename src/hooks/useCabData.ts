@@ -12,11 +12,7 @@ import {
   CustomerTrackingSession,
 } from '../types';
 import {
-  INITIAL_DRIVERS,
-  INITIAL_TRIPS,
-  INITIAL_SYSTEM_SETTINGS,
   INITIAL_RATE_CARDS,
-  INITIAL_LOGS,
   INITIAL_ADMIN_USERS,
 } from '../data/seedData';
 import {
@@ -28,14 +24,15 @@ import {
   upsertDriverInFirestore,
   deleteDriverFromFirestore,
   upsertTripInFirestore,
+  assignDriverToTripAtomically,
+  transitionTripAtomically,
+  updateTripDetailsAtomically,
   deleteTripFromFirestore,
   updateSystemSettingsInFirestore,
-  cleanUpLegacyDriverControlInFirestore,
   testFirebaseConnection,
   createTrackingSessionInFirestore,
   disableTrackingSessionInFirestore,
   cleanAndDeduplicateDriversInFirestore,
-  startUninstalledDriversCleaner,
   setDriverOfficeDue as setDriverOfficeDueInFirestore,
   clearDriverOfficeDue as clearDriverOfficeDueInFirestore,
 } from '../firebase/config';
@@ -45,6 +42,15 @@ const TRIPS_STORAGE_KEY = 'trusty_cab_trips_local_v1';
 const SETTINGS_STORAGE_KEY = 'trusty_cab_settings_local_v1';
 const RATES_STORAGE_KEY = 'trusty_cab_rates_local_v1';
 const ADMINS_STORAGE_KEY = 'trusty_cab_admins_local_v1';
+
+const EMPTY_SYSTEM_SETTINGS: SystemControlSettings = {
+  admin_online: false,
+  sync_enabled: false,
+  status: 'OFFLINE',
+  updated_at: 0,
+  broadcast_notice: '',
+  emergency_mode: false,
+};
 
 export function useCabData() {
   const [firebaseConfig, setFirebaseConfig] = useState<FirebaseConnectionConfig>(getStoredFirebaseConfig);
@@ -73,12 +79,9 @@ export function useCabData() {
 
   // Core Data States
   const [drivers, setDrivers] = useState<FirestoreDriver[]>(() => {
-    try {
-      const saved = localStorage.getItem(DRIVERS_STORAGE_KEY);
-      return saved ? JSON.parse(saved) : INITIAL_DRIVERS;
-    } catch {
-      return INITIAL_DRIVERS;
-    }
+    // Operational driver data must come from the live Firestore listener.
+    // Do not populate the fleet from cached/demo records while disconnected.
+    return [];
   });
 
   // Stable reference for 2000-5000+ drivers to prevent callback thrashing during live GPS pings
@@ -99,26 +102,17 @@ export function useCabData() {
   }, [drivers]);
 
   const [trips, setTrips] = useState<FirestoreTrip[]>(() => {
-    try {
-      const saved = localStorage.getItem(TRIPS_STORAGE_KEY);
-      const rawTrips: FirestoreTrip[] = saved ? JSON.parse(saved) : INITIAL_TRIPS;
-      return rawTrips.map((t) => ({
-        ...t,
-        tracking_token: t.tracking_token || `TRK-${t.trip_id}`,
-        tracking_enabled: t.tracking_enabled ?? true,
-        tracking_created_at: t.tracking_created_at || t.created_at || Date.now(),
-      }));
-    } catch {
-      return INITIAL_TRIPS;
-    }
+    // Operational trip data must come from the live Firestore listener.
+    // Do not populate Dispatch or History from cached/demo records offline.
+    return [];
   });
 
   const [systemSettings, setSystemSettings] = useState<SystemControlSettings>(() => {
     try {
       const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
-      return saved ? JSON.parse(saved) : INITIAL_SYSTEM_SETTINGS;
+      return saved ? JSON.parse(saved) : EMPTY_SYSTEM_SETTINGS;
     } catch {
-      return INITIAL_SYSTEM_SETTINGS;
+      return EMPTY_SYSTEM_SETTINGS;
     }
   });
 
@@ -134,7 +128,7 @@ export function useCabData() {
     }
   });
 
-  const [logs, setLogs] = useState<SystemEventLog[]>(INITIAL_LOGS);
+  const [logs, setLogs] = useState<SystemEventLog[]>([]);
 
   // Helper to append log entries
   const addLog = useCallback((level: SystemEventLog['level'], source: SystemEventLog['source'], title: string, message: string) => {
@@ -149,78 +143,17 @@ export function useCabData() {
     setLogs((prev) => [newLog, ...prev.slice(0, 99)]);
   }, []);
 
-  // Save to LocalStorage with debouncing and idle scheduling to prevent UI blocking
-  // Optimized for 5,000 to 10,000 drivers with instant local data sync
+  // Driver and trip documents can contain phone numbers, GPS coordinates, OTPs,
+  // and payment data. Firestore remains their source of truth, so remove legacy
+  // browser caches instead of persisting operational records in localStorage.
   useEffect(() => {
-    const timer = setTimeout(() => {
-      try {
-        const compact = drivers.map((d) => ({
-          doc_id: d.doc_id,
-          driver_id: d.driver_id,
-          driver_name: d.driver_name,
-          mobile_number: d.mobile_number,
-          vehicle_number: d.vehicle_number,
-          vehicle_category: d.vehicle_category,
-          status: d.status,
-          is_online: d.is_online,
-          latitude: d.latitude,
-          longitude: d.longitude,
-          rating: d.rating,
-          total_trips: d.total_trips,
-          payment_amount: d.payment_amount,
-          payment_status: d.payment_status,
-          payment_note: d.payment_note,
-          office_upi_id: d.office_upi_id,
-          driver_payment_status: d.driver_payment_status,
-          payment_updated_at: d.payment_updated_at,
-        }));
-        localStorage.setItem(DRIVERS_STORAGE_KEY, JSON.stringify(compact));
-      } catch (e) {
-        // Fallback for browser storage quota: keep core essential fleet index
-        try {
-          const fallback = drivers.slice(0, 2500).map((d) => ({
-            driver_id: d.driver_id,
-            driver_name: d.driver_name,
-            mobile_number: d.mobile_number,
-            vehicle_number: d.vehicle_number,
-            vehicle_category: d.vehicle_category,
-            status: d.status,
-            is_online: d.is_online,
-            payment_amount: d.payment_amount,
-            payment_status: d.payment_status,
-            payment_note: d.payment_note,
-            office_upi_id: d.office_upi_id,
-          }));
-          localStorage.setItem(DRIVERS_STORAGE_KEY, JSON.stringify(fallback));
-        } catch {}
-        console.warn('Driver storage save notice (quota limit handled)', e);
-      }
-    }, 1000);
-    return () => clearTimeout(timer);
-  }, [drivers]);
-
-  const suppressTripsLocalStorageRef = useRef<boolean>(false);
-
-  useEffect(() => {
-    if (suppressTripsLocalStorageRef.current) {
-      return;
+    try {
+      localStorage.removeItem(DRIVERS_STORAGE_KEY);
+      localStorage.removeItem(TRIPS_STORAGE_KEY);
+    } catch {
+      // Storage may be unavailable in hardened/private browser contexts.
     }
-    const timer = setTimeout(() => {
-      try {
-        if (trips.length > 1000) {
-          // Cache the 1000 most recent trips to keep local storage fast and comprehensive
-          localStorage.setItem(TRIPS_STORAGE_KEY, JSON.stringify(trips.slice(0, 1000)));
-        } else if (trips.length > 0) {
-          localStorage.setItem(TRIPS_STORAGE_KEY, JSON.stringify(trips));
-        } else {
-          localStorage.removeItem(TRIPS_STORAGE_KEY);
-        }
-      } catch (e) {
-        console.warn('Trips storage save notice (quota limit handled)', e);
-      }
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [trips]);
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -258,10 +191,20 @@ export function useCabData() {
   // Handle Firestore Live Synchronization
   useEffect(() => {
     let unsubs: (() => void)[] = [];
+    let disposed = false;
+    let syncAttempt = 0;
+
+    const stopSubscriptions = () => {
+      unsubs.forEach((unsubscribe) => unsubscribe());
+      unsubs = [];
+    };
 
     async function setupLiveSync() {
+      const attempt = ++syncAttempt;
+      stopSubscriptions();
       setIsSyncing(true);
       const test = await testFirebaseConnection(firebaseConfig);
+      if (disposed || attempt !== syncAttempt) return;
       if (test.success) {
         setIsFirebaseConnected(true);
         setConnectionStatusText(`Live Firestore: ${firebaseConfig.projectId}`);
@@ -281,30 +224,6 @@ export function useCabData() {
           }
         );
         if (unsubDrivers) unsubs.push(unsubDrivers);
-
-        // Ensure driver table is clean of any legacy admin control documents
-        cleanUpLegacyDriverControlInFirestore(firebaseConfig).catch(() => {});
-
-        // Automatically clean and deduplicate repeated data in drivers table in background
-        cleanAndDeduplicateDriversInFirestore(firebaseConfig).catch(() => {});
-
-        // Auto-sweep uninstalled/dead drivers every 30 seconds
-        const stopUninstalledCleaner = startUninstalledDriversCleaner(firebaseConfig, (offlineDriverId) => {
-          setDrivers((prev) =>
-            prev.map((d) =>
-              d.driver_id === offlineDriverId || (d as any).doc_id === offlineDriverId
-                ? { ...d, is_online: false, last_heartbeat: 0, device_id: '' }
-                : d
-            )
-          );
-          addLog(
-            'WARNING',
-            'ADMIN',
-            'Driver Offline Swept',
-            `Driver ${offlineDriverId} uninstalled or closed (>75s no heartbeat). Marked OFFLINE and device cleared.`
-          );
-        });
-        if (stopUninstalledCleaner) unsubs.push(stopUninstalledCleaner);
 
         // Subscribe to trips
         const unsubTrips = subscribeToFirestoreTrips(
@@ -363,8 +282,8 @@ export function useCabData() {
           'ADMIN',
           test.isUnavailable ? 'Offline Local Console Mode' : 'Local Mode Active',
           test.isUnavailable
-            ? 'Firestore backend is currently unreachable. Operating locally with instant dispatch and demo fleet.'
-            : 'Operating with instant local dispatch engine and demo fleet.'
+            ? 'Firestore backend is currently unreachable. Waiting for live backend data.'
+            : 'Live Firestore data is unavailable.'
         );
       }
       setIsSyncing(false);
@@ -373,42 +292,18 @@ export function useCabData() {
     setupLiveSync();
 
     const handleOnline = () => {
-      addLog('INFO', 'NETWORK', 'Network Reconnected', 'Device is back online. Re-checking Firestore sync...');
+      addLog('INFO', 'FIRESTORE', 'Network Reconnected', 'Device is back online. Re-checking Firestore sync...');
       setupLiveSync();
     };
     window.addEventListener('online', handleOnline);
 
     return () => {
+      disposed = true;
+      syncAttempt++;
       window.removeEventListener('online', handleOnline);
-      unsubs.forEach((fn) => fn());
+      stopSubscriptions();
     };
   }, [firebaseConfig, addLog]);
-
-  // Periodic simulated live GPS driver movement (subtle drift for realism in demo mode only)
-  useEffect(() => {
-    if (isFirebaseConnected) return; // Do not drift simulated GPS when live Firestore is connected
-
-    const interval = setInterval(() => {
-      setDrivers((prevDrivers) =>
-        prevDrivers.map((drv) => {
-          if (!drv.is_online || drv.status !== 'ACTIVE' || drv.latitude === null || drv.longitude === null) {
-            return drv;
-          }
-          // Small random coordinate drift (~5-15 meters)
-          const deltaLat = (Math.random() - 0.5) * 0.0004;
-          const deltaLng = (Math.random() - 0.5) * 0.0004;
-          return {
-            ...drv,
-            latitude: Number((drv.latitude + deltaLat).toFixed(5)),
-            longitude: Number((drv.longitude + deltaLng).toFixed(5)),
-            last_heartbeat: Date.now(),
-          };
-        })
-      );
-    }, 15000);
-
-    return () => clearInterval(interval);
-  }, []);
 
   // Local/Offline driver heartbeat auto-sweep (check every 30 seconds)
   useEffect(() => {
@@ -422,7 +317,6 @@ export function useCabData() {
           const heartbeat = d.last_heartbeat || 0;
           if (d.is_online && heartbeat > 0 && heartbeat < cutoffTime) {
             changed = true;
-            console.log(`Driver ${d.driver_id} uninstalled or closed. Marking OFFLINE.`);
             return {
               ...d,
               is_online: false,
@@ -463,7 +357,7 @@ export function useCabData() {
         );
         if (busyTrip) {
           const errorMsg = `Driver is already on an ongoing in-process trip (${busyTrip.trip_id} - ${busyTrip.status}). Cannot assign new ride to an ongoing driver.`;
-          addLog('WARN', 'DISPATCH', 'Create Trip Blocked', errorMsg);
+          addLog('WARNING', 'DISPATCH', 'Create Trip Blocked', errorMsg);
           throw new Error(errorMsg);
         }
       }
@@ -509,22 +403,36 @@ export function useCabData() {
         tracking_created_at: now,
       };
 
-      // Update local state
-      setTrips((prev) => [newTrip, ...prev]);
+      // Persist first so a failed write cannot be presented as a successful trip.
+      if (isFirebaseConnected) {
+        if (newTrip.driver_id) {
+          const assignedDriver = driversRef.current.find((driver) => driver.driver_id === newTrip.driver_id);
+          if (!assignedDriver) throw new Error('Assigned driver is no longer available.');
+          const openTrip: FirestoreTrip = {
+            ...newTrip,
+            status: 'OPEN',
+            driver_id: null,
+            driver_name: null,
+            driver_phone: null,
+            vehicle_number: null,
+            accepted_at: null,
+          };
+          const created = await upsertTripInFirestore(firebaseConfig, openTrip);
+          if (!created) throw new Error('Trip could not be created in Firestore.');
+          await assignDriverToTripAtomically(firebaseConfig, newTrip, assignedDriver);
+        } else {
+          const created = await upsertTripInFirestore(firebaseConfig, newTrip);
+          if (!created) throw new Error('Trip could not be created in Firestore.');
+        }
+      }
 
-      // If driver was directly assigned, update driver state
+      setTrips((prev) => [newTrip, ...prev]);
       if (newTrip.driver_id) {
         setDrivers((prev) =>
           prev.map((d) => (d.driver_id === newTrip.driver_id ? { ...d, current_trip_id: newTrip.trip_id } : d))
         );
       }
-
       addLog('SUCCESS', 'DISPATCH', 'Trip Created', `Trip ${newTrip.trip_id} dispatched for ${newTrip.customer_name} (${newTrip.pickup_location} -> ${newTrip.drop_location}).`);
-
-      // Write to Firestore if live connected
-      if (isFirebaseConnected) {
-        await upsertTripInFirestore(firebaseConfig, newTrip);
-      }
 
       return newTrip;
     },
@@ -543,36 +451,37 @@ export function useCabData() {
       );
       if (busyTrip) {
         const errorMsg = `Driver ${driver.driver_name} (${driver.driver_id}) is already on an ongoing in-process trip (${busyTrip.trip_id} - ${busyTrip.status}). Trips cannot be assigned to an ongoing driver.`;
-        addLog('WARN', 'DISPATCH', 'Assignment Blocked', errorMsg);
+        addLog('WARNING', 'DISPATCH', 'Assignment Blocked', errorMsg);
         throw new Error(errorMsg);
       }
 
       const now = Date.now();
-      setTrips((prev) =>
-        prev.map((t) => {
-          if (t.doc_id === tripDocId || t.trip_id === tripDocId) {
-            const updated: FirestoreTrip = {
-              ...t,
-              status: 'ACCEPTED',
-              driver_id: driver.driver_id,
-              driver_name: driver.driver_name,
-              driver_phone: driver.mobile_number,
-              vehicle_number: driver.vehicle_number,
-              vehicle_category: driver.vehicle_category,
-              accepted_at: now,
-              updated_at: now,
-            };
-            if (isFirebaseConnected) {
-              upsertTripInFirestore(firebaseConfig, updated);
-            }
-            return updated;
-          }
-          return t;
-        })
-      );
+      const targetTrip = trips.find((t) => t.doc_id === tripDocId || t.trip_id === tripDocId);
+      if (!targetTrip) throw new Error('Trip not found. Refresh and try again.');
+      if (targetTrip.status !== 'OPEN' && targetTrip.driver_id !== driver.driver_id) {
+        throw new Error('Trip is no longer open for assignment.');
+      }
+      const updated: FirestoreTrip = {
+        ...targetTrip,
+        status: 'ACCEPTED',
+        driver_id: driver.driver_id,
+        driver_name: driver.driver_name,
+        driver_phone: driver.mobile_number,
+        vehicle_number: driver.vehicle_number,
+        vehicle_category: driver.vehicle_category,
+        accepted_at: now,
+        updated_at: now,
+      };
+
+      if (isFirebaseConnected) {
+        await assignDriverToTripAtomically(firebaseConfig, updated, driver);
+      }
+      setTrips((prev) => prev.map((t) =>
+        t.doc_id === tripDocId || t.trip_id === tripDocId ? updated : t
+      ));
 
       setDrivers((prev) =>
-        prev.map((d) => (d.driver_id === driver.driver_id ? { ...d, current_trip_id: tripDocId } : d))
+        prev.map((d) => (d.driver_id === driver.driver_id ? { ...d, current_trip_id: updated.trip_id } : d))
       );
 
       addLog('INFO', 'DISPATCH', 'Driver Assigned', `Driver ${driver.driver_name} (${driver.driver_id}) assigned to trip.`);
@@ -583,33 +492,26 @@ export function useCabData() {
   const startTripWithOtp = useCallback(
     async (tripDocId: string, enteredOtp?: string) => {
       const now = Date.now();
-      let matched = false;
-      setTrips((prev) =>
-        prev.map((t) => {
-          if (t.doc_id === tripDocId || t.trip_id === tripDocId) {
-            if (enteredOtp && t.otp && enteredOtp !== t.otp) {
-              throw new Error(`Invalid OTP. Ride expected ${t.otp}`);
-            }
-            matched = true;
-            const updated: FirestoreTrip = {
-              ...t,
-              status: 'IN_PROGRESS',
-              started_at: now,
-              updated_at: now,
-            };
-            if (isFirebaseConnected) {
-              upsertTripInFirestore(firebaseConfig, updated);
-            }
-            return updated;
-          }
-          return t;
-        })
-      );
-      if (matched) {
-        addLog('INFO', 'DRIVER', 'Trip Started', `Trip ${tripDocId} started with verified OTP.`);
+      const targetTrip = trips.find((t) => t.doc_id === tripDocId || t.trip_id === tripDocId);
+      if (!targetTrip) throw new Error('Trip not found. Refresh and try again.');
+      if (enteredOtp && targetTrip.otp && enteredOtp !== targetTrip.otp) {
+        throw new Error(`Invalid OTP. Ride expected ${targetTrip.otp}`);
       }
+      const updated: FirestoreTrip = {
+        ...targetTrip,
+        status: 'IN_PROGRESS',
+        started_at: now,
+        updated_at: now,
+      };
+      if (isFirebaseConnected) {
+        await transitionTripAtomically(firebaseConfig, updated, ['ACCEPTED']);
+      }
+      setTrips((prev) => prev.map((t) =>
+        t.doc_id === tripDocId || t.trip_id === tripDocId ? updated : t
+      ));
+      addLog('INFO', 'DRIVER', 'Trip Started', `Trip ${tripDocId} started with verified OTP.`);
     },
-    [isFirebaseConnected, firebaseConfig, addLog]
+    [isFirebaseConnected, firebaseConfig, addLog, trips]
   );
 
   const completeTrip = useCallback(
@@ -621,34 +523,29 @@ export function useCabData() {
       waitingSec: number = 0
     ) => {
       const now = Date.now();
-      let assignedDriverId: string | null = null;
-
-      setTrips((prev) =>
-        prev.map((t) => {
-          if (t.doc_id === tripDocId || t.trip_id === tripDocId) {
-            assignedDriverId = t.driver_id;
-            const updated: FirestoreTrip = {
-              ...t,
-              status: 'COMPLETED',
-              final_fare: finalFare,
-              completed_at: now,
-              updated_at: now,
-              distance_km: distanceKm || t.distance_km || 12,
-              duration_seconds: durationSec || 1500,
-              waiting_seconds: waitingSec || 0,
-              tracking_enabled: false, // Auto-expire tracking
-            };
-            if (isFirebaseConnected) {
-              upsertTripInFirestore(firebaseConfig, updated);
-              if (t.tracking_token) {
-                disableTrackingSessionInFirestore(firebaseConfig, t.tracking_token, tripDocId).catch(() => {});
-              }
-            }
-            return updated;
-          }
-          return t;
-        })
-      );
+      const targetTrip = trips.find((t) => t.doc_id === tripDocId || t.trip_id === tripDocId);
+      if (!targetTrip) throw new Error('Trip not found. Refresh and try again.');
+      const assignedDriverId = targetTrip.driver_id;
+      const assignedDriver = assignedDriverId
+        ? driversRef.current.find((d) => d.driver_id === assignedDriverId) || null
+        : null;
+      const updated: FirestoreTrip = {
+        ...targetTrip,
+        status: 'COMPLETED',
+        final_fare: finalFare,
+        completed_at: now,
+        updated_at: now,
+        distance_km: distanceKm || targetTrip.distance_km || 12,
+        duration_seconds: durationSec || 1500,
+        waiting_seconds: waitingSec || 0,
+        tracking_enabled: false,
+      };
+      if (isFirebaseConnected) {
+        await transitionTripAtomically(firebaseConfig, updated, ['IN_PROGRESS', 'ACCEPTED'], assignedDriver, true);
+      }
+      setTrips((prev) => prev.map((t) =>
+        t.doc_id === tripDocId || t.trip_id === tripDocId ? updated : t
+      ));
 
       if (assignedDriverId) {
         setDrivers((prev) =>
@@ -666,98 +563,73 @@ export function useCabData() {
 
       addLog('SUCCESS', 'DISPATCH', 'Trip Completed', `Trip ${tripDocId} marked completed. Final fare: ₹${finalFare}.`);
     },
-    [isFirebaseConnected, firebaseConfig, addLog]
+    [isFirebaseConnected, firebaseConfig, addLog, trips]
   );
 
   const cancelTrip = useCallback(
     async (tripDocId: string, reason: string = 'Cancelled by Admin') => {
       const now = Date.now();
-      let assignedDriverId: string | null = null;
-      let targetTrip: FirestoreTrip | null = null;
-
-      setTrips((prev) =>
-        prev.map((t) => {
-          if (t.doc_id === tripDocId || t.trip_id === tripDocId) {
-            assignedDriverId = t.driver_id;
-            const updated: FirestoreTrip = {
-              ...t,
-              status: 'CANCELLED',
-              notes: t.notes ? `${t.notes} [${reason}]` : reason,
-              updated_at: now,
-              tracking_enabled: false, // Auto-expire tracking
-            };
-            if (isFirebaseConnected && t.tracking_token) {
-              disableTrackingSessionInFirestore(firebaseConfig, t.tracking_token, tripDocId).catch(() => {});
-            }
-            targetTrip = updated;
-            return updated;
-          }
-          return t;
-        })
-      );
-
-      if (targetTrip && isFirebaseConnected) {
-        await upsertTripInFirestore(firebaseConfig, targetTrip);
+      const targetTrip = trips.find((t) => t.doc_id === tripDocId || t.trip_id === tripDocId);
+      if (!targetTrip) throw new Error('Trip not found. Refresh and try again.');
+      const assignedDriverId = targetTrip.driver_id;
+      const assignedDriver = assignedDriverId
+        ? driversRef.current.find((d) => d.driver_id === assignedDriverId) || null
+        : null;
+      const updated: FirestoreTrip = {
+        ...targetTrip,
+        status: 'CANCELLED',
+        notes: targetTrip.notes ? `${targetTrip.notes} [${reason}]` : reason,
+        updated_at: now,
+        tracking_enabled: false,
+      };
+      if (isFirebaseConnected) {
+        await transitionTripAtomically(firebaseConfig, updated, ['OPEN', 'ACCEPTED', 'IN_PROGRESS'], assignedDriver);
       }
+      setTrips((prev) => prev.map((t) =>
+        t.doc_id === tripDocId || t.trip_id === tripDocId ? updated : t
+      ));
 
       if (assignedDriverId) {
         setDrivers((prev) =>
           prev.map((d) => (d.driver_id === assignedDriverId ? { ...d, current_trip_id: null } : d))
         );
-        if (isFirebaseConnected) {
-          const releasedDriver = driversRef.current.find((d) => d.driver_id === assignedDriverId);
-          if (releasedDriver) {
-            await upsertDriverInFirestore(firebaseConfig, { ...releasedDriver, current_trip_id: null });
-          }
-        }
       }
 
       addLog('WARNING', 'DISPATCH', 'Trip Cancelled', `Trip ${tripDocId} was cancelled (${reason}).`);
     },
-    [isFirebaseConnected, firebaseConfig, addLog]
+    [isFirebaseConnected, firebaseConfig, addLog, trips]
   );
 
   const unassignDriverFromTrip = useCallback(
     async (tripDocId: string, reason: string = 'Driver unassigned by dispatcher') => {
       const now = Date.now();
-      let unassignedDriverId: string | null = null;
-      let targetTrip: FirestoreTrip | null = null;
-
-      setTrips((prev) =>
-        prev.map((t) => {
-          if (t.doc_id === tripDocId || t.trip_id === tripDocId) {
-            unassignedDriverId = t.driver_id;
-            const updated: FirestoreTrip = {
-              ...t,
-              status: 'OPEN',
-              driver_id: null,
-              driver_name: null,
-              driver_phone: null,
-              vehicle_number: null,
-              notes: '',
-              updated_at: now,
-            };
-            targetTrip = updated;
-            return updated;
-          }
-          return t;
-        })
-      );
-
-      if (targetTrip && isFirebaseConnected) {
-        await upsertTripInFirestore(firebaseConfig, targetTrip);
+      const targetTrip = trips.find((t) => t.doc_id === tripDocId || t.trip_id === tripDocId);
+      if (!targetTrip) throw new Error('Trip not found. Refresh and try again.');
+      const unassignedDriverId = targetTrip.driver_id;
+      const unassignedDriver = unassignedDriverId
+        ? driversRef.current.find((d) => d.driver_id === unassignedDriverId) || null
+        : null;
+      const updated: FirestoreTrip = {
+        ...targetTrip,
+        status: 'OPEN',
+        driver_id: null,
+        driver_name: null,
+        driver_phone: null,
+        vehicle_number: null,
+        notes: '',
+        updated_at: now,
+      };
+      if (isFirebaseConnected) {
+        await transitionTripAtomically(firebaseConfig, updated, ['ACCEPTED'], unassignedDriver);
       }
+      setTrips((prev) => prev.map((t) =>
+        t.doc_id === tripDocId || t.trip_id === tripDocId ? updated : t
+      ));
 
       if (unassignedDriverId) {
         setDrivers((prev) =>
           prev.map((d) => (d.driver_id === unassignedDriverId ? { ...d, current_trip_id: null } : d))
         );
-        if (isFirebaseConnected) {
-          const releasedDriver = driversRef.current.find((d) => d.driver_id === unassignedDriverId);
-          if (releasedDriver) {
-            await upsertDriverInFirestore(firebaseConfig, { ...releasedDriver, current_trip_id: null });
-          }
-        }
       }
 
       addLog(
@@ -767,16 +639,12 @@ export function useCabData() {
         `Trip ${tripDocId} returned to OPEN status. Driver released (${reason}).`
       );
     },
-    [isFirebaseConnected, firebaseConfig, addLog]
+    [isFirebaseConnected, firebaseConfig, addLog, trips]
   );
 
   const updateTripDetails = useCallback(
     async (tripDocId: string, updates: Partial<FirestoreTrip>) => {
       const now = Date.now();
-      let oldDriverId: string | null = null;
-      let newDriverId: string | null = null;
-      let targetTrip: FirestoreTrip | null = null;
-
       const normalizedUpdates: Partial<FirestoreTrip> = {
         ...updates,
         dispatch_type: updates.dispatch_type || 'BROADCAST',
@@ -794,54 +662,46 @@ export function useCabData() {
         );
         if (busyTrip) {
           const errorMsg = `Driver is already on an ongoing in-process trip (${busyTrip.trip_id} - ${busyTrip.status}). Trips cannot be assigned to an ongoing driver.`;
-          addLog('WARN', 'DISPATCH', 'Update Trip Blocked', errorMsg);
+          addLog('WARNING', 'DISPATCH', 'Update Trip Blocked', errorMsg);
           throw new Error(errorMsg);
         }
       }
 
-      setTrips((prev) =>
-        prev.map((t) => {
-          if (t.doc_id === tripDocId || t.trip_id === tripDocId) {
-            oldDriverId = t.driver_id;
-            newDriverId = normalizedUpdates.driver_id !== undefined ? normalizedUpdates.driver_id : t.driver_id;
-            const updated: FirestoreTrip = {
-              ...t,
-              ...normalizedUpdates,
-              updated_at: now,
-            };
-            targetTrip = updated;
-            return updated;
-          }
-          return t;
-        })
-      );
+      const originalTrip = trips.find((t) => t.doc_id === tripDocId || t.trip_id === tripDocId);
+      if (!originalTrip) throw new Error('Trip not found. Refresh and try again.');
+      const oldDriverId = originalTrip.driver_id;
+      const newDriverId = normalizedUpdates.driver_id !== undefined
+        ? normalizedUpdates.driver_id
+        : originalTrip.driver_id;
+      const targetTrip: FirestoreTrip = {
+        ...originalTrip,
+        ...normalizedUpdates,
+        updated_at: now,
+      };
+      const oldDriver = oldDriverId
+        ? driversRef.current.find((driver) => driver.driver_id === oldDriverId) || null
+        : null;
+      const newDriver = newDriverId
+        ? driversRef.current.find((driver) => driver.driver_id === newDriverId) || null
+        : null;
 
-      if (targetTrip && isFirebaseConnected) {
-        await upsertTripInFirestore(firebaseConfig, targetTrip);
+      if (isFirebaseConnected) {
+        await updateTripDetailsAtomically(firebaseConfig, originalTrip, targetTrip, oldDriver, newDriver);
       }
+      setTrips((prev) => prev.map((t) =>
+        t.doc_id === tripDocId || t.trip_id === tripDocId ? targetTrip : t
+      ));
 
       // Manage driver assignments if driver changed or status changed
       if (oldDriverId && oldDriverId !== newDriverId) {
         setDrivers((prev) =>
           prev.map((d) => (d.driver_id === oldDriverId ? { ...d, current_trip_id: null } : d))
         );
-        if (isFirebaseConnected) {
-          const oldD = driversRef.current.find((d) => d.driver_id === oldDriverId);
-          if (oldD) {
-            await upsertDriverInFirestore(firebaseConfig, { ...oldD, current_trip_id: null });
-          }
-        }
       }
       if (newDriverId && newDriverId !== oldDriverId) {
         setDrivers((prev) =>
-          prev.map((d) => (d.driver_id === newDriverId ? { ...d, current_trip_id: tripDocId } : d))
+          prev.map((d) => (d.driver_id === newDriverId ? { ...d, current_trip_id: targetTrip.trip_id } : d))
         );
-        if (isFirebaseConnected) {
-          const newD = driversRef.current.find((d) => d.driver_id === newDriverId);
-          if (newD) {
-            await upsertDriverInFirestore(firebaseConfig, { ...newD, current_trip_id: tripDocId });
-          }
-        }
       }
       if (normalizedUpdates.status === 'CANCELLED' || normalizedUpdates.status === 'COMPLETED') {
         const finalDriverId = newDriverId || oldDriverId;
@@ -864,10 +724,11 @@ export function useCabData() {
 
   const deleteTrip = useCallback(
     async (tripDocId: string) => {
-      setTrips((prev) => prev.filter((t) => t.doc_id !== tripDocId && t.trip_id !== tripDocId));
       if (isFirebaseConnected) {
-        await deleteTripFromFirestore(firebaseConfig, tripDocId);
+        const deleted = await deleteTripFromFirestore(firebaseConfig, tripDocId);
+        if (!deleted) throw new Error('Trip could not be deleted from Firestore.');
       }
+      setTrips((prev) => prev.filter((t) => t.doc_id !== tripDocId && t.trip_id !== tripDocId));
       addLog('INFO', 'ADMIN', 'Trip Deleted', `Trip record ${tripDocId} removed from database.`);
     },
     [isFirebaseConnected, firebaseConfig, addLog]
@@ -876,7 +737,6 @@ export function useCabData() {
   // Clear Local Storage ONLY (Guaranteed zero deletion on remote Firestore/backend database)
   const clearLocalTripsStorage = useCallback(
     (clearLocalViewOnly: boolean = false) => {
-      suppressTripsLocalStorageRef.current = true;
       try {
         localStorage.removeItem(TRIPS_STORAGE_KEY);
         localStorage.removeItem('trusty_cab_trips_local_v1');
@@ -921,89 +781,74 @@ export function useCabData() {
       }
 
       const now = Date.now();
-      let targetTrip: FirestoreTrip | null = null;
-
-      setTrips((prev) =>
-        prev.map((t) => {
-          if (t.doc_id === tripDocId || t.trip_id === tripDocId) {
-            const updated: FirestoreTrip = {
-              ...t,
-              tracking_token: token,
-              tracking_enabled: true,
-              tracking_created_at: now,
-              updated_at: now,
-            };
-            targetTrip = updated;
-            return updated;
-          }
-          return t;
-        })
-      );
-
-      if (targetTrip) {
-        const trip = targetTrip as FirestoreTrip;
-        if (isFirebaseConnected) {
-          const session: CustomerTrackingSession = {
-            token,
-            trip_id: trip.trip_id || tripDocId,
-            created_at: now,
-            is_active: true,
-            customer_name: trip.customer_name || 'Customer',
-            customer_phone: trip.customer_phone || '',
-            driver_id: trip.driver_id || null,
-          };
-          await createTrackingSessionInFirestore(firebaseConfig, session, trip.doc_id || tripDocId);
-          await upsertTripInFirestore(firebaseConfig, trip);
-        }
-        addLog(
-          'INFO',
-          'DISPATCH',
-          'Tracking Link Generated',
-          `Customer tracking link generated for trip ${trip.trip_id} (${token}) upon customer request.`
-        );
+      const targetTrip = trips.find((t) => t.doc_id === tripDocId || t.trip_id === tripDocId);
+      if (!targetTrip) throw new Error('Trip not found. Refresh and try again.');
+      const trip: FirestoreTrip = {
+        ...targetTrip,
+        tracking_token: token,
+        tracking_enabled: true,
+        tracking_created_at: now,
+        updated_at: now,
+      };
+      if (isFirebaseConnected) {
+        const session: CustomerTrackingSession = {
+          token,
+          trip_id: trip.trip_id || tripDocId,
+          created_at: now,
+          is_active: true,
+          customer_name: trip.customer_name || 'Customer',
+          customer_phone: trip.customer_phone || '',
+          driver_id: trip.driver_id || null,
+        };
+        const result = await createTrackingSessionInFirestore(firebaseConfig, session, trip.doc_id || tripDocId);
+        if (!result.success) throw new Error(result.error || 'Tracking link could not be saved.');
       }
+      setTrips((prev) => prev.map((t) =>
+        t.doc_id === tripDocId || t.trip_id === tripDocId ? trip : t
+      ));
+      addLog(
+        'INFO',
+        'DISPATCH',
+        'Tracking Link Generated',
+        `Customer tracking link generated for trip ${trip.trip_id} (${token}) upon customer request.`
+      );
 
       const origin = typeof window !== 'undefined' ? window.location.origin : 'https://track.trustyyellowcab.com';
       const link = `${origin}/?track=${token}`;
       return { token, link };
     },
-    [isFirebaseConnected, firebaseConfig, addLog]
+    [isFirebaseConnected, firebaseConfig, addLog, trips]
   );
 
   const disableCustomerTrackingLink = useCallback(
     async (tripDocId: string) => {
-      let tokenToDisable: string | undefined;
-      let targetTripId: string | undefined;
-      let targetDocId: string = tripDocId;
-
-      setTrips((prev) =>
-        prev.map((t) => {
-          if (t.doc_id === tripDocId || t.trip_id === tripDocId) {
-            tokenToDisable = t.tracking_token;
-            targetTripId = t.trip_id;
-            targetDocId = t.doc_id || tripDocId;
-            return {
-              ...t,
-              tracking_enabled: false,
-              updated_at: Date.now(),
-            };
-          }
-          return t;
-        })
-      );
-
-      if (tokenToDisable && isFirebaseConnected) {
-        await disableTrackingSessionInFirestore(firebaseConfig, tokenToDisable, targetDocId);
+      const targetTrip = trips.find((t) => t.doc_id === tripDocId || t.trip_id === tripDocId);
+      if (!targetTrip) throw new Error('Trip not found. Refresh and try again.');
+      const updated: FirestoreTrip = {
+        ...targetTrip,
+        tracking_enabled: false,
+        updated_at: Date.now(),
+      };
+      if (targetTrip.tracking_token && isFirebaseConnected) {
+        const result = await disableTrackingSessionInFirestore(
+          firebaseConfig,
+          targetTrip.tracking_token,
+          targetTrip.doc_id || tripDocId
+        );
+        if (!result.success) throw new Error(result.error || 'Tracking link could not be disabled.');
       }
+      setTrips((prev) => prev.map((t) =>
+        t.doc_id === tripDocId || t.trip_id === tripDocId ? updated : t
+      ));
 
       addLog(
         'WARNING',
         'DISPATCH',
         'Tracking Link Revoked',
-        `Customer live tracking link disabled by dispatch for trip ${targetTripId || tripDocId}.`
+        `Customer live tracking link disabled by dispatch for trip ${targetTrip.trip_id || tripDocId}.`
       );
     },
-    [isFirebaseConnected, firebaseConfig, addLog]
+    [isFirebaseConnected, firebaseConfig, addLog, trips]
   );
 
   // -------------------------------------------------------------
@@ -1032,14 +877,9 @@ export function useCabData() {
         expiryDate = d.toISOString().split('T')[0];
       }
 
-      // 3. Resolve FCM Token: auto-generate FCM token or use provided
-      let fcmToken = driverData.fcm_token?.trim() || '';
-      if (!fcmToken) {
-        const cleanId = driverId.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const rnd1 = Math.random().toString(36).substring(2, 10);
-        const rnd2 = Math.random().toString(36).substring(2, 10);
-        fcmToken = `fcm_${cleanId || 'drv'}_${Date.now().toString(36)}_${rnd1}${rnd2}`;
-      }
+      // FCM registration tokens are issued by Firebase Messaging on the driver's device.
+      // An empty value correctly means that no push-capable device has registered yet.
+      const fcmToken = driverData.fcm_token?.trim() || '';
 
       // 4. Clean single dataset - no duplicate alias fields
       const newDriver: FirestoreDriver = {
@@ -1056,19 +896,19 @@ export function useCabData() {
         expiry_date: expiryDate,
         photo_version: 1,
         device_id: '', // Device ID strictly blank empty until driver connects Android app
-        fcm_token: fcmToken, // Auto FCM token
+        fcm_token: fcmToken,
         rating: 5.0,
         total_trips: 0,
         current_trip_id: null,
       };
 
-      // 3. Deduplicate: if same driver ID already exists, update/replace so table has exactly ONE entry
+      if (isFirebaseConnected) {
+        const saved = await upsertDriverInFirestore(firebaseConfig, newDriver);
+        if (!saved) throw new Error('Driver could not be saved in Firestore.');
+      }
+
       setDrivers((prev) => [newDriver, ...prev.filter((d) => d.driver_id !== driverId)]);
       addLog('SUCCESS', 'ADMIN', 'Driver Registered', `Driver ${newDriver.driver_name || driverId} (${driverId}) added to fleet.`);
-
-      if (isFirebaseConnected) {
-        await upsertDriverInFirestore(firebaseConfig, newDriver);
-      }
 
       return newDriver;
     },
@@ -1077,20 +917,16 @@ export function useCabData() {
 
   const updateDriver = useCallback(
     async (driverId: string, partial: Partial<FirestoreDriver>) => {
-      let updatedDriver: FirestoreDriver | null = null;
-      setDrivers((prev) =>
-        prev.map((d) => {
-          if (d.driver_id === driverId) {
-            updatedDriver = { ...d, ...partial };
-            return updatedDriver;
-          }
-          return d;
-        })
-      );
-
-      if (updatedDriver && isFirebaseConnected) {
-        await upsertDriverInFirestore(firebaseConfig, updatedDriver);
+      const existing = driversRef.current.find((driver) => driver.driver_id === driverId);
+      if (!existing) throw new Error('Driver not found. Refresh and try again.');
+      const updatedDriver: FirestoreDriver = { ...existing, ...partial };
+      if (isFirebaseConnected) {
+        const saved = await upsertDriverInFirestore(firebaseConfig, updatedDriver);
+        if (!saved) throw new Error('Driver update failed in Firestore.');
       }
+      setDrivers((prev) => prev.map((driver) =>
+        driver.driver_id === driverId ? updatedDriver : driver
+      ));
       addLog('INFO', 'ADMIN', 'Driver Updated', `Driver profile for ${driverId} updated.`);
     },
     [isFirebaseConnected, firebaseConfig, addLog]
@@ -1099,57 +935,23 @@ export function useCabData() {
   const toggleDriverStatus = useCallback(
     async (driverId: string) => {
       const trimmedId = (driverId || '').trim().toLowerCase();
-      let nextStatus: DriverStatus = 'ACTIVE';
-      let targetDriver: FirestoreDriver | null = null;
-
-      // Calculate new state synchronously from current state
-      setDrivers((prev) => {
-        const found = prev.find(
-          (d) =>
-            d.driver_id.trim().toLowerCase() === trimmedId ||
-            (d as any).doc_id === driverId
-        );
-
-        const isCurrentlyActive = (found?.status || '').toUpperCase() === 'ACTIVE';
-        nextStatus = isCurrentlyActive ? 'BLOCKED' : 'ACTIVE';
-
-        return prev.map((d) => {
-          if (
-            d.driver_id.trim().toLowerCase() === trimmedId ||
-            (d as any).doc_id === driverId
-          ) {
-            targetDriver = {
-              ...d,
-              status: nextStatus,
-              is_online: nextStatus === 'ACTIVE' ? (d.is_online ?? true) : false,
-            };
-            return targetDriver;
-          }
-          return d;
-        });
-      });
-
-      // If targetDriver wasn't captured or if fallback needed, fetch from drivers ref
-      if (!targetDriver) {
-        const existing = driversRef.current.find(
-          (d) =>
-            d.driver_id.trim().toLowerCase() === trimmedId ||
-            (d as any).doc_id === driverId
-        );
-        if (existing) {
-          const isCurrentlyActive = (existing.status || '').toUpperCase() === 'ACTIVE';
-          nextStatus = isCurrentlyActive ? 'BLOCKED' : 'ACTIVE';
-          targetDriver = {
-            ...existing,
-            status: nextStatus,
-            is_online: nextStatus === 'ACTIVE' ? (existing.is_online ?? true) : false,
-          };
-        }
+      const existing = driversRef.current.find(
+        (driver) => driver.driver_id.trim().toLowerCase() === trimmedId || driver.doc_id === driverId
+      );
+      if (!existing) throw new Error('Driver not found. Refresh and try again.');
+      const nextStatus: DriverStatus = existing.status === 'ACTIVE' ? 'BLOCKED' : 'ACTIVE';
+      const targetDriver: FirestoreDriver = {
+        ...existing,
+        status: nextStatus,
+        is_online: nextStatus === 'ACTIVE' ? existing.is_online : false,
+      };
+      if (isFirebaseConnected) {
+        const saved = await upsertDriverInFirestore(firebaseConfig, targetDriver);
+        if (!saved) throw new Error('Driver status update failed in Firestore.');
       }
-
-      if (targetDriver && isFirebaseConnected) {
-        await upsertDriverInFirestore(firebaseConfig, targetDriver);
-      }
+      setDrivers((prev) => prev.map((driver) =>
+        driver.driver_id === existing.driver_id ? targetDriver : driver
+      ));
 
       addLog(
         nextStatus === 'BLOCKED' ? 'WARNING' : 'SUCCESS',
@@ -1163,24 +965,16 @@ export function useCabData() {
 
   const resetDriverDeviceBinding = useCallback(
     async (driverId: string) => {
-      let targetDriver: FirestoreDriver | null = null;
-      setDrivers((prev) =>
-        prev.map((d) => {
-          if (d.driver_id === driverId) {
-            targetDriver = {
-              ...d,
-              device_id: '',
-              is_online: false,
-            };
-            return targetDriver;
-          }
-          return d;
-        })
-      );
-
-      if (targetDriver && isFirebaseConnected) {
-        await upsertDriverInFirestore(firebaseConfig, targetDriver);
+      const existing = driversRef.current.find((driver) => driver.driver_id === driverId);
+      if (!existing) throw new Error('Driver not found. Refresh and try again.');
+      const targetDriver: FirestoreDriver = { ...existing, device_id: '', is_online: false };
+      if (isFirebaseConnected) {
+        const saved = await upsertDriverInFirestore(firebaseConfig, targetDriver);
+        if (!saved) throw new Error('Device reset failed in Firestore.');
       }
+      setDrivers((prev) => prev.map((driver) =>
+        driver.driver_id === driverId ? targetDriver : driver
+      ));
       addLog('INFO', 'ADMIN', 'Device Session Cleared', `Device ID unlinked for driver ${driverId}. Driver can now login on new mobile hardware.`);
     },
     [isFirebaseConnected, firebaseConfig, addLog]
@@ -1196,12 +990,13 @@ export function useCabData() {
         }
       }
 
+      if (isFirebaseConnected) {
+        const deleted = await deleteDriverFromFirestore(firebaseConfig, driverId, targetDocId);
+        if (!deleted) throw new Error('Driver could not be deleted from Firestore.');
+      }
       setDrivers((prev) =>
         prev.filter((d) => d.driver_id !== driverId && (!targetDocId || d.doc_id !== targetDocId))
       );
-      if (isFirebaseConnected) {
-        await deleteDriverFromFirestore(firebaseConfig, driverId, targetDocId);
-      }
       addLog('WARNING', 'ADMIN', 'Driver Deleted', `Driver ${driverId} removed from fleet.`);
     },
     [isFirebaseConnected, firebaseConfig, addLog]
@@ -1244,6 +1039,18 @@ export function useCabData() {
       );
       const targetDocId = targetDriver?.doc_id;
 
+      if (isFirebaseConnected) {
+        const saved = await setDriverOfficeDueInFirestore(
+          firebaseConfig,
+          driverId,
+          cleanAmount,
+          note,
+          officeUpiId,
+          targetDocId
+        );
+        if (!saved) throw new Error('Driver payment update failed in Firestore.');
+      }
+
       setDrivers((prev) =>
         prev.map((d) => {
           if (d.driver_id === driverId || (targetDocId && d.doc_id === targetDocId)) {
@@ -1260,20 +1067,9 @@ export function useCabData() {
         })
       );
 
-      if (isFirebaseConnected) {
-        await setDriverOfficeDueInFirestore(
-          firebaseConfig,
-          driverId,
-          cleanAmount,
-          note,
-          officeUpiId,
-          targetDocId
-        );
-      }
-
       addLog(
         cleanAmount > 0 ? 'INFO' : 'SUCCESS',
-        'PAYMENT',
+        'ADMIN',
         cleanAmount > 0 ? 'Office Due Set' : 'Office Due Cleared',
         `Driver ${driverId}: ₹${cleanAmount} (${paymentStatus}) - "${note}"`
       );
@@ -1287,6 +1083,11 @@ export function useCabData() {
         (d) => d.driver_id === driverId || d.driver_id === driverId.trim().toUpperCase()
       );
       const targetDocId = targetDriver?.doc_id;
+
+      if (isFirebaseConnected) {
+        const saved = await clearDriverOfficeDueInFirestore(firebaseConfig, driverId, targetDocId);
+        if (!saved) throw new Error('Driver payment clearance failed in Firestore.');
+      }
 
       setDrivers((prev) =>
         prev.map((d) => {
@@ -1304,11 +1105,7 @@ export function useCabData() {
         })
       );
 
-      if (isFirebaseConnected) {
-        await clearDriverOfficeDueInFirestore(firebaseConfig, driverId, targetDocId);
-      }
-
-      addLog('SUCCESS', 'PAYMENT', 'Office Due Cleared', `Driver ${driverId} dues cleared to ₹0 (Verified).`);
+      addLog('SUCCESS', 'ADMIN', 'Office Due Cleared', `Driver ${driverId} dues cleared to ₹0 (Verified).`);
     },
     [isFirebaseConnected, firebaseConfig, addLog]
   );
@@ -1330,7 +1127,13 @@ export function useCabData() {
         updated_at: now,
       };
 
-      setSystemSettings(nextSettings);
+      // Clean, single document update in system_settings/dispatch_control
+      // Driver table remains strictly untouched and contains only driver records.
+      if (isFirebaseConnected) {
+        const res = await updateSystemSettingsInFirestore(firebaseConfig, nextSettings);
+        if (!res.success) throw new Error(res.error || 'System control update failed in Firestore.');
+      }
+      setSystemSettings({ ...nextSettings, rule_permission_notice: undefined });
       addLog(
         online ? 'SUCCESS' : 'ALERT',
         'ADMIN',
@@ -1339,34 +1142,6 @@ export function useCabData() {
           ? 'Live data exchange with driver applications active.'
           : 'Backend dispatch cutoff activated. Driver apps switch to offline fallback.'
       );
-
-      // Clean, single document update in system_settings/dispatch_control
-      // Driver table remains strictly untouched and contains only driver records.
-      if (isFirebaseConnected) {
-        cleanUpLegacyDriverControlInFirestore(firebaseConfig).catch(() => {});
-
-        const res = await updateSystemSettingsInFirestore(firebaseConfig, nextSettings);
-        if (res.permissionDenied) {
-          const notice =
-            'Remote Firestore rules currently deny direct write to /system_settings/dispatch_control. ' +
-            'Open Rules Manager to copy and publish the updated rules in your Firebase Console.';
-          setSystemSettings((prev) => ({
-            ...prev,
-            rule_permission_notice: notice,
-          }));
-          addLog(
-            'WARNING',
-            'FIRESTORE',
-            'Remote Rules Notice',
-            'Remote rules restrict /system_settings/dispatch_control.'
-          );
-        } else if (res.success) {
-          setSystemSettings((prev) => ({
-            ...prev,
-            rule_permission_notice: undefined,
-          }));
-        }
-      }
     },
     [systemSettings, isFirebaseConnected, firebaseConfig, addLog]
   );
@@ -1378,20 +1153,12 @@ export function useCabData() {
         broadcast_notice: noticeText,
         updated_at: Date.now(),
       };
-      setSystemSettings(nextSettings);
-      addLog('INFO', 'ADMIN', 'Broadcast Notice Updated', `Notice broadcast to fleet: "${noticeText}"`);
-
       if (isFirebaseConnected) {
         const res = await updateSystemSettingsInFirestore(firebaseConfig, nextSettings);
-        if (res.permissionDenied) {
-          addLog(
-            'WARNING',
-            'FIRESTORE',
-            'Broadcast Notice Alert',
-            'Publish rules in Rules Manager for /system_settings/dispatch_control.'
-          );
-        }
+        if (!res.success) throw new Error(res.error || 'Broadcast notice update failed in Firestore.');
       }
+      setSystemSettings(nextSettings);
+      addLog('INFO', 'ADMIN', 'Broadcast Notice Updated', `Notice broadcast to fleet: "${noticeText}"`);
     },
     [systemSettings, isFirebaseConnected, firebaseConfig, addLog]
   );

@@ -1,17 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import {
-  ClipboardPaste,
-  X,
-  Sparkles,
-  Car,
-  Phone,
-  MapPin,
-  Clock,
-  IndianRupee,
-  CheckCircle2,
-  ArrowRight,
-  RotateCcw,
-} from 'lucide-react';
+import { X } from 'lucide-react';
 import { parseBookingText, ParsedBookingData } from '../../services/bookingParser';
 import { FirestoreTrip, FirestoreDriver } from '../../types';
 
@@ -98,57 +86,37 @@ export const PasteBookingModal: React.FC<PasteBookingModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-3 backdrop-blur-sm sm:p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) handleClose();
       }}
     >
-      <div className="w-full max-w-2xl bg-white rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-200 max-h-[92vh]">
+      <div className="flex max-h-[92dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl animate-in fade-in zoom-in-95 duration-200 lg:max-w-3xl">
         {/* Header */}
-        <div className="px-5 sm:px-6 py-4 border-b border-slate-100 flex items-center justify-between shrink-0 bg-slate-50/70">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold shadow-sm shadow-amber-500/20">
-              <ClipboardPaste className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-extrabold text-slate-900 leading-tight">
-                  Paste Booking Details
-                </h3>
-                <span className="text-[10px] bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-full border border-amber-300">
-                  Auto-Detect Any Format
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Paste any booking message (WhatsApp, email, SMS, or plain text) to auto-extract details.
-              </p>
-            </div>
-          </div>
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-5 py-4 sm:px-6">
+          <h3 className="text-base font-bold leading-tight text-slate-900 sm:text-lg">
+            Paste Booking Message
+          </h3>
           <button
+            type="button"
+            aria-label="Close paste booking modal"
             onClick={handleClose}
-            className="w-8 h-8 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 flex items-center justify-center transition cursor-pointer"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
           >
-            <X className="w-5 h-5" />
+            <X className="h-5 w-5" />
           </button>
         </div>
 
         {/* Modal Body */}
-        <div className="p-5 sm:p-6 overflow-y-auto space-y-4 flex-1">
-          {/* Action Ribbon: Paste from Clipboard & Clear */}
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-              <span>Paste Booking Message / Text:</span>
-            </label>
-
-            <div className="flex items-center gap-2">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5 sm:p-6">
+          {/* Paste from Clipboard & Clear */}
+          <div className="flex flex-wrap items-center gap-2">
               {clipboardSupported && (
                 <button
                   type="button"
                   onClick={handleReadClipboard}
-                  className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-950 font-bold text-xs rounded-lg border border-amber-200 flex items-center gap-1.5 transition cursor-pointer"
+                  className="min-h-[44px] rounded-lg border border-[#FF9800] bg-white px-4 text-xs font-bold text-[#FF9800] transition hover:bg-orange-50"
                 >
-                  <ClipboardPaste className="w-3.5 h-3.5 text-amber-600" />
                   <span>Paste from Clipboard</span>
                 </button>
               )}
@@ -156,13 +124,11 @@ export const PasteBookingModal: React.FC<PasteBookingModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setPastedText('')}
-                  className="px-2.5 py-1.5 text-slate-400 hover:text-slate-700 text-xs font-semibold rounded-lg hover:bg-slate-100 flex items-center gap-1 transition cursor-pointer"
+                  className="min-h-[44px] rounded-lg px-3 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                 >
-                  <RotateCcw className="w-3 h-3" />
                   <span>Clear</span>
                 </button>
               )}
-            </div>
           </div>
 
           {/* Textarea Input without sample button */}
@@ -172,17 +138,16 @@ export const PasteBookingModal: React.FC<PasteBookingModalProps> = ({
               rows={6}
               value={pastedText}
               onChange={(e) => setPastedText(e.target.value)}
-              placeholder="Paste any booking format here (e.g. WhatsApp message, email, SMS, travel portal, or raw text like 'Gandhipuram to Airport 9876543210 Sedan 1200')..."
-              className="w-full border-2 border-slate-200 focus:border-amber-500 focus:ring-4 focus:ring-amber-500/15 rounded-2xl p-4 text-xs font-mono text-slate-900 bg-slate-50/50 outline-none transition resize-none leading-relaxed shadow-inner"
+              placeholder="Paste booking details from WhatsApp, SMS, email, or any message..."
+              className="w-full resize-none rounded-xl border border-slate-200 bg-white p-4 text-sm leading-relaxed text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-[#FF9800] focus:ring-2 focus:ring-[#FF9800]/20"
             />
           </div>
 
           {/* Extracted Details Live Card */}
           {parsed && (
-            <div className="bg-gradient-to-br from-slate-50 to-amber-50/30 rounded-2xl p-4 border border-amber-200/80 shadow-2xs space-y-3 animate-in fade-in slide-in-from-bottom-2">
-              <div className="flex items-center justify-between border-b border-amber-200/60 pb-2.5">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 animate-in fade-in slide-in-from-bottom-2">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
+                <div>
                   <span className="text-xs font-extrabold text-slate-900">
                     Detected Trip Details
                   </span>
@@ -192,10 +157,9 @@ export const PasteBookingModal: React.FC<PasteBookingModalProps> = ({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+              <div className="grid grid-cols-1 gap-2.5 text-xs sm:grid-cols-2">
                 {/* Customer Phone */}
-                <div className="flex items-start gap-2 bg-white/80 p-2.5 rounded-xl border border-slate-200/60">
-                  <Phone className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                <div className="rounded-lg border border-slate-200 p-2.5">
                   <div className="min-w-0">
                     <span className="text-[10px] text-slate-400 font-bold block uppercase">Phone</span>
                     <span className="font-extrabold text-slate-900">
@@ -209,8 +173,7 @@ export const PasteBookingModal: React.FC<PasteBookingModalProps> = ({
                 </div>
 
                 {/* Vehicle Category */}
-                <div className="flex items-start gap-2 bg-white/80 p-2.5 rounded-xl border border-slate-200/60">
-                  <Car className="w-3.5 h-3.5 text-sky-600 shrink-0 mt-0.5" />
+                <div className="rounded-lg border border-slate-200 p-2.5">
                   <div className="min-w-0">
                     <span className="text-[10px] text-slate-400 font-bold block uppercase">Vehicle</span>
                     <span className="font-extrabold text-slate-900">
@@ -220,8 +183,7 @@ export const PasteBookingModal: React.FC<PasteBookingModalProps> = ({
                 </div>
 
                 {/* Pickup */}
-                <div className="flex items-start gap-2 bg-white/80 p-2.5 rounded-xl border border-slate-200/60 sm:col-span-2">
-                  <MapPin className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="rounded-lg border border-slate-200 p-2.5 sm:col-span-2">
                   <div className="min-w-0 flex-1">
                     <span className="text-[10px] text-slate-400 font-bold block uppercase">Pickup</span>
                     <span className="font-bold text-slate-900 break-words">
@@ -231,8 +193,7 @@ export const PasteBookingModal: React.FC<PasteBookingModalProps> = ({
                 </div>
 
                 {/* Drop / Package */}
-                <div className="flex items-start gap-2 bg-white/80 p-2.5 rounded-xl border border-slate-200/60 sm:col-span-2">
-                  <MapPin className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
+                <div className="rounded-lg border border-slate-200 p-2.5 sm:col-span-2">
                   <div className="min-w-0 flex-1">
                     <span className="text-[10px] text-slate-400 font-bold block uppercase">
                       {parsed.isPackage ? 'Package Details' : 'Destination'}
@@ -253,8 +214,7 @@ export const PasteBookingModal: React.FC<PasteBookingModalProps> = ({
 
                 {/* Fare */}
                 {parsed.estimatedFare && (
-                  <div className="flex items-start gap-2 bg-white/80 p-2.5 rounded-xl border border-slate-200/60">
-                    <IndianRupee className="w-3.5 h-3.5 text-purple-600 shrink-0 mt-0.5" />
+                  <div className="rounded-lg border border-slate-200 p-2.5">
                     <div className="min-w-0">
                       <span className="text-[10px] text-slate-400 font-bold block uppercase">Estimated Fare</span>
                       <span className="font-extrabold text-slate-900 text-sm">
@@ -266,8 +226,7 @@ export const PasteBookingModal: React.FC<PasteBookingModalProps> = ({
 
                 {/* Schedule if any */}
                 {(parsed.date || parsed.time) && (
-                  <div className="flex items-start gap-2 bg-white/80 p-2.5 rounded-xl border border-slate-200/60">
-                    <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="rounded-lg border border-slate-200 p-2.5">
                     <div className="min-w-0">
                       <span className="text-[10px] text-slate-400 font-bold block uppercase">Schedule</span>
                       <span className="font-bold text-slate-800">
@@ -282,11 +241,11 @@ export const PasteBookingModal: React.FC<PasteBookingModalProps> = ({
         </div>
 
         {/* Footer Actions: ONLY Review in Form */}
-        <div className="px-5 sm:px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-3 shrink-0">
+        <div className="flex shrink-0 items-center gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:px-6">
           <button
             type="button"
             onClick={handleClose}
-            className="px-4 py-2.5 text-slate-600 hover:text-slate-900 font-bold text-xs rounded-xl hover:bg-slate-200/60 transition cursor-pointer"
+            className="min-h-[44px] flex-1 rounded-lg border border-slate-200 bg-white px-4 text-center text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
           >
             Cancel
           </button>
@@ -296,14 +255,13 @@ export const PasteBookingModal: React.FC<PasteBookingModalProps> = ({
             type="button"
             disabled={!parsed}
             onClick={handleApply}
-            className={`px-6 py-2.5 rounded-xl font-black text-xs flex items-center gap-2 transition cursor-pointer ${
+            className={`min-h-[44px] flex-1 rounded-lg px-4 text-center text-xs font-bold transition ${
               parsed
-                ? 'bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-slate-950 shadow-md shadow-amber-500/25'
-                : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                ? 'bg-[#FF9800] text-white hover:bg-[#e68900] active:bg-[#cc7a00]'
+                : 'cursor-not-allowed bg-slate-100 text-slate-400'
             }`}
           >
             <span>Review in Form</span>
-            <ArrowRight className="w-4 h-4 stroke-[2.5]" />
           </button>
         </div>
       </div>

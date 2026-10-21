@@ -10,7 +10,7 @@ export function getGoogleMapsApiKey(): string {
   if (typeof window === 'undefined') return '';
   const stored = localStorage.getItem(STORAGE_KEY_MAPS_API_KEY);
   if (stored && stored.trim()) return stored.trim();
-  const envKey = (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY;
+  const envKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   if (envKey && envKey.trim()) return envKey.trim();
   return '';
 }

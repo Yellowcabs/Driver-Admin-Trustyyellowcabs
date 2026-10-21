@@ -3,29 +3,7 @@ import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
 import {defineConfig, Plugin} from 'vite';
-
-type VitePWAPluginFactory = (options?: Record<string, unknown>) => Plugin;
-
-const pwaPluginFactory = (() => {
-  try {
-    const mod = require('vite-plugin-pwa') as {
-      VitePWA?: VitePWAPluginFactory;
-    };
-    return mod.VitePWA ?? (() => ({
-      name: 'vite-plugin-pwa-disabled',
-      apply() {
-        return false;
-      },
-    }));
-  } catch {
-    return (() => ({
-      name: 'vite-plugin-pwa-disabled',
-      apply() {
-        return false;
-      },
-    })) as VitePWAPluginFactory;
-  }
-})();
+import { VitePWA } from 'vite-plugin-pwa';
 
 // LINT.IfChange(aistudio_media_plugin)
 function aistudioMediaPlugin(): Plugin {
@@ -87,16 +65,16 @@ function aistudioMediaPlugin(): Plugin {
 }
 // LINT.ThenChange(//depot/google3/java/com/google/alkali/boq/makersuite/applet_dev_service/templates/initializers/react_theme/vite.config.ts:aistudio_media_plugin)
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
       tailwindcss(),
       aistudioMediaPlugin(),
-      pwaPluginFactory({
+      VitePWA({
         registerType: 'prompt',
         injectRegister: false,
-        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon.svg'],
+        includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
         manifest: {
           id: '/',
           name: 'Trusty Yellow Cab Admin',
@@ -144,6 +122,7 @@ export default defineConfig(() => {
     },
     build: {
       target: 'esnext',
+      sourcemap: false,
       cssCodeSplit: true,
       chunkSizeWarningLimit: 1200,
       rollupOptions: {
@@ -171,6 +150,11 @@ export default defineConfig(() => {
         },
       },
     },
+    esbuild: mode === 'production'
+      ? {
+          drop: ['console', 'debugger'],
+        }
+      : undefined,
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.

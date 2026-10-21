@@ -65,7 +65,7 @@ export const SystemControl: React.FC<SystemControlProps> = ({
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-[768px]:max-[1024px]:space-y-4 lg:space-y-5">
       {/* Top Banner & Cutoff Warning */}
       <div
         className={`p-6 rounded-2xl border transition-all ${

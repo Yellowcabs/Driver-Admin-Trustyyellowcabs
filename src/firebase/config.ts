@@ -15,9 +15,10 @@ import {
   orderBy,
   limit,
   Unsubscribe,
-  enableIndexedDbPersistence,
   deleteField,
   serverTimestamp,
+  runTransaction,
+  writeBatch,
 } from 'firebase/firestore';
 import { FirestoreDriver, FirestoreTrip, SystemControlSettings, FirebaseConnectionConfig, DriverStatus, CustomerTrackingSession } from '../types';
 import { DEFAULT_FIREBASE_CONFIG } from '../data/seedData';
@@ -67,22 +68,18 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   return errInfo;
 }
 
-const CONFIG_STORAGE_KEY = 'trusty_cab_firebase_config_v1';
-
 export function getStoredFirebaseConfig(): FirebaseConnectionConfig {
-  const envProjectId = (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID;
-  const envApiKey = (import.meta as any).env?.VITE_FIREBASE_API_KEY;
-  const envAuthDomain = (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN;
-  const envAppId = (import.meta as any).env?.VITE_FIREBASE_APP_ID;
-  const envStorageBucket = (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET;
-  const envAdminSecret = (import.meta as any).env?.VITE_ADMIN_SECRET;
+  const envProjectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
+  const envApiKey = import.meta.env.VITE_FIREBASE_API_KEY;
+  const envAuthDomain = import.meta.env.VITE_FIREBASE_AUTH_DOMAIN;
+  const envAppId = import.meta.env.VITE_FIREBASE_APP_ID;
+  const envStorageBucket = import.meta.env.VITE_FIREBASE_STORAGE_BUCKET;
 
   const projectId = envProjectId || DEFAULT_FIREBASE_CONFIG.projectId || 'trusty-yellow-cab';
   const apiKey = envApiKey || DEFAULT_FIREBASE_CONFIG.apiKey || '';
   const authDomain = envAuthDomain || (projectId ? `${projectId}.firebaseapp.com` : DEFAULT_FIREBASE_CONFIG.authDomain);
   const appId = envAppId || DEFAULT_FIREBASE_CONFIG.appId || '';
   const storageBucket = envStorageBucket || (projectId ? `${projectId}.firebasestorage.app` : DEFAULT_FIREBASE_CONFIG.storageBucket);
-  const adminSecret = envAdminSecret || DEFAULT_FIREBASE_CONFIG.adminSecret || '';
 
   return {
     projectId,
@@ -90,7 +87,6 @@ export function getStoredFirebaseConfig(): FirebaseConnectionConfig {
     authDomain,
     appId,
     storageBucket,
-    adminSecret,
     isLiveConnected: Boolean(apiKey && projectId),
   };
 }
@@ -127,10 +123,6 @@ export function getOrCreateFirebaseInstance(config: FirebaseConnectionConfig): {
     }, appName);
 
     activeDb = getFirestore(activeApp);
-    // Optimize reads for 5,000 to 10,000 drivers using client-side IndexedDb disk cache
-    try {
-      enableIndexedDbPersistence(activeDb).catch(() => {});
-    } catch {}
     return { app: activeApp, db: activeDb };
   } catch (error) {
     console.warn('Firebase initialization notice:', error);
@@ -152,16 +144,17 @@ export async function testFirebaseConnection(config: FirebaseConnectionConfig): 
     if (!db) {
       return { success: false, message: 'Could not initialize Firebase SDK with provided credentials.' };
     }
-    // Attempt reading system_settings document with a 6-second timeout race
-    const testPromise = getDocs(collection(db, 'system_settings'));
+    // Probe the same single document used by the live settings listener instead
+    // of reading the entire system_settings collection just to verify access.
+    const testPromise = getDoc(doc(db, 'system_settings', 'dispatch_control'));
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('Connection timed out. Cloud Firestore backend may be unreachable or offline.')), 6000)
     );
 
-    const snapshot = await Promise.race([testPromise, timeoutPromise]);
+    await Promise.race([testPromise, timeoutPromise]);
     return {
       success: true,
-      message: `Successfully connected to Firebase Project "${config.projectId}". Found ${snapshot.size} system documents.`,
+      message: `Successfully connected to Firebase Project "${config.projectId}".`,
     };
   } catch (err: any) {
     const errMsg = err?.message || String(err);
@@ -198,7 +191,6 @@ export function subscribeToFirestoreDrivers(
 
     const driversQuery = collection(db, 'drivers');
     const driverCache = new Map<string, FirestoreDriver>();
-    const cleanedRedundantDocIds = new Set<string>();
     let hasLoadedFirstSnapshot = false;
     let dispatchTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -220,19 +212,6 @@ export function subscribeToFirestoreDrivers(
       const mobileNumber = (data.mobile_number || data.driver_mobile || data.phone || data.driver_phone || '').toString().trim();
       const vehicleNumber = (data.vehicle_number || data.vehicle_no || '').toString().trim();
       const vehicleCategory = (data.vehicle_category || data.vehicle_type || 'Mini').toString().trim().toUpperCase();
-      // Backend self-healing: automatically purge redundant/unwanted fields in Firestore (upi_id, last_sync_time, last_seen)
-      if ((data.upi_id !== undefined || data.last_sync_time !== undefined || data.last_seen !== undefined) && !cleanedRedundantDocIds.has(docSnap.id)) {
-        cleanedRedundantDocIds.add(docSnap.id);
-        setTimeout(() => {
-          updateDoc(docSnap.ref, {
-            upi_id: deleteField(),
-            last_sync_time: deleteField(),
-            last_seen: deleteField(),
-            office_upi_id: data.office_upi_id !== undefined ? String(data.office_upi_id).trim() : (data.upi_id ? String(data.upi_id).trim() : ''),
-          }).catch(() => {});
-        }, 1000);
-      }
-
       return {
         doc_id: docSnap.id,
         driver_id: driverId,
@@ -268,7 +247,6 @@ export function subscribeToFirestoreDrivers(
       // Deduplicate by driver_id and mobile_number so multiple documents with the same driver do NOT create duplicate rows
       const uniqueDriversMap = new Map<string, FirestoreDriver>();
       const mobileToKey = new Map<string, string>();
-      const duplicateDocIdsToDelete = new Set<string>();
 
       for (const d of driverCache.values()) {
         const key = (d.driver_id || d.doc_id).trim().toUpperCase();
@@ -289,25 +267,15 @@ export function subscribeToFirestoreDrivers(
           const isCurrentBetter = d.doc_id === d.driver_id;
           if (isCurrentBetter) {
             uniqueDriversMap.set(existingKey, d);
-            if (existing.doc_id && existing.doc_id !== d.doc_id) {
-              duplicateDocIdsToDelete.add(existing.doc_id);
-            }
           } else {
-            if (d.doc_id && d.doc_id !== existing.doc_id) {
-              duplicateDocIdsToDelete.add(d.doc_id);
-            }
+            // Keep the preferred document in memory only. Realtime reads must not
+            // mutate or delete production records.
           }
         }
       }
 
       onData(Array.from(uniqueDriversMap.values()));
 
-      // Automatically delete secondary duplicate documents in Firestore to reduce excess data reads
-      if (duplicateDocIdsToDelete.size > 0 && db) {
-        duplicateDocIdsToDelete.forEach((dupId) => {
-          deleteDoc(doc(db, 'drivers', dupId)).catch(() => {});
-        });
-      }
     };
 
     const scheduleFlush = () => {
@@ -438,6 +406,7 @@ export function subscribeToFirestoreTrips(
     const tripsMap = new Map<string, FirestoreTrip>();
     let hasLoadedFirstTrips = false;
     let dispatchTimer: any = null;
+    let fallbackUnsubscribe: Unsubscribe | null = null;
 
     const flushTrips = () => {
       const list = Array.from(tripsMap.values()).sort((a, b) => b.created_at - a.created_at);
@@ -482,7 +451,8 @@ export function subscribeToFirestoreTrips(
       (err) => {
         console.warn('Firestore trips listener error:', err);
         try {
-          const fallbackSub = onSnapshot(
+          if (fallbackUnsubscribe) return;
+          fallbackUnsubscribe = onSnapshot(
             collection(db, 'trips'),
             (snapshot) => {
               tripsMap.clear();
@@ -493,7 +463,6 @@ export function subscribeToFirestoreTrips(
             },
             onError
           );
-          return fallbackSub;
         } catch {
           onError(err);
         }
@@ -502,6 +471,7 @@ export function subscribeToFirestoreTrips(
 
     return () => {
       if (dispatchTimer) clearTimeout(dispatchTimer);
+      if (fallbackUnsubscribe) fallbackUnsubscribe();
       unsubscribe();
     };
   } catch (err) {
@@ -610,15 +580,6 @@ export async function upsertDriverInFirestore(config: FirebaseConnectionConfig, 
     if (driver.payment_updated_at !== undefined) mapData.payment_updated_at = driver.payment_updated_at;
 
     await setDoc(docRef, mapData, { merge: true });
-
-    // If driver had a legacy document ID different from targetDocId, remove the duplicate document
-    if (driver.doc_id && driver.doc_id !== targetDocId) {
-      try {
-        await deleteDoc(doc(db, 'drivers', driver.doc_id));
-      } catch (legacyErr) {
-        console.warn('Could not clean legacy duplicate doc:', legacyErr);
-      }
-    }
 
     return true;
   } catch (err) {
@@ -807,24 +768,9 @@ export async function deleteDriverFromFirestore(
     const { db } = getOrCreateFirebaseInstance(config);
     if (!db) return false;
 
-    // 1. Delete by docId if specified
-    if (docId) {
-      try {
-        await deleteDoc(doc(db, 'drivers', docId));
-      } catch (err1) {
-        console.warn('Doc deletion by docId note:', err1);
-      }
-    }
-
-    // 2. Delete by driverId if different or not yet deleted
-    if (driverId && driverId !== docId) {
-      try {
-        await deleteDoc(doc(db, 'drivers', driverId));
-      } catch (err2) {
-        console.warn('Doc deletion by driverId note:', err2);
-      }
-    }
-
+    const targetDocId = (docId || driverId).trim();
+    if (!targetDocId) return false;
+    await deleteDoc(doc(db, 'drivers', targetDocId));
     return true;
   } catch (err) {
     console.error('Error deleting driver from Firestore:', err);
@@ -850,7 +796,8 @@ export async function setDriverOfficeDue(
     const { db } = getOrCreateFirebaseInstance(config);
     if (!db) return false;
 
-    const normalizedDriverId = driverId.trim().toUpperCase();
+    const targetDocId = (docId || driverId).trim();
+    if (!targetDocId) return false;
     const cleanAmount = Math.max(0, Number(amount) || 0);
     const paymentStatus = cleanAmount > 0 ? 'DUE' : 'CLEARED';
     const paymentUpdatedAt = Date.now();
@@ -860,33 +807,15 @@ export async function setDriverOfficeDue(
       payment_status: paymentStatus,
       payment_note: note || 'Trip CC (Convenience Charge)',
       office_upi_id: (officeUpiId || '').trim(),
-      upi_id: deleteField(),
-      last_sync_time: deleteField(),
-      last_seen: deleteField(),
       updated_at: serverTimestamp(),
       payment_updated_at: paymentUpdatedAt,
     };
 
-    // Primary document ID matching spec: driverId.trim().toUpperCase()
-    const primaryRef = doc(db, 'drivers', normalizedDriverId);
+    // Update the exact document already loaded by the admin UI. Never migrate or
+    // delete a driver profile as a side effect of changing payment fields.
+    const primaryRef = doc(db, 'drivers', targetDocId);
     await setDoc(primaryRef, paymentPayload, { merge: true });
 
-    // Clean up any legacy secondary documents to reduce excess Firestore reads and prevent duplicates
-    if (docId && docId !== normalizedDriverId) {
-      try {
-        await deleteDoc(doc(db, 'drivers', docId));
-      } catch (e) {
-        console.warn('Sync cleanup of secondary docId failed:', e);
-      }
-    } else if (driverId.trim() !== normalizedDriverId) {
-      try {
-        await deleteDoc(doc(db, 'drivers', driverId.trim()));
-      } catch (e) {
-        console.warn('Sync cleanup of original driverId failed:', e);
-      }
-    }
-
-    console.log(`Payment info updated for driver ${driverId}: ₹${cleanAmount}`);
     return true;
   } catch (error) {
     console.error('Error setting driver due:', error);
@@ -923,38 +852,20 @@ export async function clearDriverOfficeDue(
     const { db } = getOrCreateFirebaseInstance(config);
     if (!db) return false;
 
-    const normalizedDriverId = driverId.trim().toUpperCase();
+    const targetDocId = (docId || driverId).trim();
+    if (!targetDocId) return false;
     const paymentPayload = {
       payment_amount: 0.0,
       payment_status: 'CLEARED',
       payment_note: 'No Dues Pending',
       driver_payment_status: 'VERIFIED',
-      upi_id: deleteField(),
-      last_sync_time: deleteField(),
-      last_seen: deleteField(),
       updated_at: serverTimestamp(),
       payment_updated_at: Date.now(),
     };
 
-    const primaryRef = doc(db, 'drivers', normalizedDriverId);
+    const primaryRef = doc(db, 'drivers', targetDocId);
     await setDoc(primaryRef, paymentPayload, { merge: true });
 
-    // Clean up any legacy secondary documents to reduce excess Firestore reads and prevent duplicates
-    if (docId && docId !== normalizedDriverId) {
-      try {
-        await deleteDoc(doc(db, 'drivers', docId));
-      } catch (e) {
-        console.warn('Sync cleanup of secondary docId failed:', e);
-      }
-    } else if (driverId.trim() !== normalizedDriverId) {
-      try {
-        await deleteDoc(doc(db, 'drivers', driverId.trim()));
-      } catch (e) {
-        console.warn('Sync cleanup of original driverId failed:', e);
-      }
-    }
-
-    console.log(`Payment cleared & verified for driver ${driverId}`);
     return true;
   } catch (error) {
     console.error('Error clearing driver due:', error);
@@ -976,6 +887,51 @@ export async function markPaymentCleared(
 /**
  * Upserts a trip document in Firestore matching Android Driver App format
  */
+function serializeTripForFirestore(trip: FirestoreTrip): Record<string, unknown> {
+  const tripMap: Record<string, unknown> = {
+    trip_id: (trip.trip_id || '').toString().replace(/^TRIP-?/i, '').trim(),
+    customer_name: trip.customer_name,
+    customer_phone: trip.customer_phone,
+    pickup_location: trip.pickup_location,
+    drop_location: trip.drop_location,
+    pickup_lat: trip.pickup_lat,
+    pickup_lng: trip.pickup_lng,
+    drop_lat: trip.drop_lat,
+    drop_lng: trip.drop_lng,
+    status: trip.status,
+    driver_id: trip.driver_id,
+    driver_name: trip.driver_name,
+    driver_phone: trip.driver_phone,
+    vehicle_number: trip.vehicle_number,
+    vehicle_category: trip.vehicle_category,
+    estimated_fare: trip.estimated_fare,
+    final_fare: trip.final_fare,
+    notes: trip.notes,
+    created_at: trip.created_at || Date.now(),
+    updated_at: trip.updated_at || Date.now(),
+    accepted_at: trip.accepted_at,
+    started_at: trip.started_at,
+    completed_at: trip.completed_at,
+    trip_type: trip.trip_type,
+    base_fare: trip.base_fare,
+    kms_fare: trip.kms_fare,
+    hour_fare: trip.hour_fare,
+    is_package: trip.is_package,
+    package_hours: trip.package_hours ?? null,
+    package_kms: trip.package_kms ?? null,
+    dispatch_type: trip.dispatch_type,
+    radius_kms: trip.radius_kms,
+    otp: trip.otp,
+  };
+  if (trip.distance_km !== undefined) tripMap.distance_km = trip.distance_km;
+  if (trip.duration_seconds !== undefined) tripMap.duration_seconds = trip.duration_seconds;
+  if (trip.waiting_seconds !== undefined) tripMap.waiting_seconds = trip.waiting_seconds;
+  if (trip.tracking_token !== undefined) tripMap.tracking_token = trip.tracking_token;
+  if (trip.tracking_enabled !== undefined) tripMap.tracking_enabled = trip.tracking_enabled;
+  if (trip.tracking_created_at !== undefined) tripMap.tracking_created_at = trip.tracking_created_at;
+  return tripMap;
+}
+
 export async function upsertTripInFirestore(config: FirebaseConnectionConfig, trip: FirestoreTrip): Promise<boolean> {
   try {
     const { db } = getOrCreateFirebaseInstance(config);
@@ -984,57 +940,169 @@ export async function upsertTripInFirestore(config: FirebaseConnectionConfig, tr
     const docId = trip.doc_id || `trip_doc_${Date.now()}`;
     const docRef = doc(db, 'trips', docId);
 
-    const cleanTripId = (trip.trip_id || '').toString().replace(/^TRIP-?/i, '').trim();
-    const tripMap: Record<string, any> = {
-      trip_id: cleanTripId,
-      customer_name: trip.customer_name,
-      customer_phone: trip.customer_phone,
-      pickup_location: trip.pickup_location,
-      drop_location: trip.drop_location,
-      pickup_lat: trip.pickup_lat,
-      pickup_lng: trip.pickup_lng,
-      drop_lat: trip.drop_lat,
-      drop_lng: trip.drop_lng,
-      status: trip.status,
-      driver_id: trip.driver_id,
-      driver_name: trip.driver_name,
-      driver_phone: trip.driver_phone,
-      vehicle_number: trip.vehicle_number,
-      vehicle_category: trip.vehicle_category,
-      estimated_fare: trip.estimated_fare,
-      final_fare: trip.final_fare,
-      notes: trip.notes,
-      created_at: trip.created_at || Date.now(),
-      updated_at: Date.now(),
-      accepted_at: trip.accepted_at,
-      started_at: trip.started_at,
-      completed_at: trip.completed_at,
-      trip_type: trip.trip_type,
-      base_fare: trip.base_fare,
-      kms_fare: trip.kms_fare,
-      hour_fare: trip.hour_fare,
-      is_package: trip.is_package,
-      package_hours: trip.package_hours ?? null,
-      package_kms: trip.package_kms ?? null,
-      dispatch_type: trip.dispatch_type,
-      radius_kms: trip.radius_kms,
-      otp: trip.otp,
-      admin_secret: 'cab_admin_secret_auth',
-    };
-
-    if (trip.distance_km !== undefined) tripMap.distance_km = trip.distance_km;
-    if (trip.duration_seconds !== undefined) tripMap.duration_seconds = trip.duration_seconds;
-    if (trip.waiting_seconds !== undefined) tripMap.waiting_seconds = trip.waiting_seconds;
-    if (trip.tracking_token !== undefined) tripMap.tracking_token = trip.tracking_token;
-    if (trip.tracking_enabled !== undefined) tripMap.tracking_enabled = trip.tracking_enabled;
-    if (trip.tracking_created_at !== undefined) tripMap.tracking_created_at = trip.tracking_created_at;
-
-    await setDoc(docRef, tripMap, { merge: true });
+    await setDoc(docRef, serializeTripForFirestore(trip), { merge: true });
     return true;
   } catch (err) {
     console.error('Error writing trip to Firestore:', err);
     return false;
   }
+}
+
+/** Atomically claims a trip and a driver so two dispatchers cannot assign them concurrently. */
+export async function assignDriverToTripAtomically(
+  config: FirebaseConnectionConfig,
+  trip: FirestoreTrip,
+  driver: FirestoreDriver
+): Promise<void> {
+  const { db } = getOrCreateFirebaseInstance(config);
+  if (!db || !trip.doc_id) throw new Error('Trip database record is unavailable.');
+
+  const tripRef = doc(db, 'trips', trip.doc_id);
+  const driverRef = doc(db, 'drivers', driver.doc_id || driver.driver_id);
+  await runTransaction(db, async (transaction) => {
+    const [tripSnapshot, driverSnapshot] = await Promise.all([
+      transaction.get(tripRef),
+      transaction.get(driverRef),
+    ]);
+    if (!tripSnapshot.exists()) throw new Error('Trip no longer exists. Refresh and try again.');
+    if (!driverSnapshot.exists()) throw new Error('Driver no longer exists. Refresh and try again.');
+
+    const currentTrip = tripSnapshot.data();
+    const currentDriver = driverSnapshot.data();
+    if (currentTrip.status !== 'OPEN' && currentTrip.driver_id !== driver.driver_id) {
+      throw new Error('Trip was already assigned or changed by another dispatcher.');
+    }
+    const busyTripId = currentDriver.current_trip_id;
+    if (busyTripId && busyTripId !== trip.trip_id && busyTripId !== trip.doc_id) {
+      throw new Error('Driver was assigned to another trip. Refresh and choose another driver.');
+    }
+
+    transaction.update(tripRef, {
+      status: 'ACCEPTED',
+      driver_id: driver.driver_id,
+      driver_name: driver.driver_name,
+      driver_phone: driver.mobile_number,
+      vehicle_number: driver.vehicle_number,
+      vehicle_category: driver.vehicle_category,
+      accepted_at: trip.accepted_at,
+      updated_at: trip.updated_at,
+    });
+    transaction.update(driverRef, {
+      current_trip_id: trip.trip_id,
+      updated_at: serverTimestamp(),
+    });
+  });
+}
+
+/** Atomically changes trip status and, when supplied, releases its driver. */
+export async function transitionTripAtomically(
+  config: FirebaseConnectionConfig,
+  trip: FirestoreTrip,
+  expectedStatuses: string[],
+  driver?: FirestoreDriver | null,
+  incrementDriverTrips: boolean = false
+): Promise<void> {
+  const { db } = getOrCreateFirebaseInstance(config);
+  if (!db || !trip.doc_id) throw new Error('Trip database record is unavailable.');
+
+  const tripRef = doc(db, 'trips', trip.doc_id);
+  const driverRef = driver ? doc(db, 'drivers', driver.doc_id || driver.driver_id) : null;
+  await runTransaction(db, async (transaction) => {
+    const tripSnapshot = await transaction.get(tripRef);
+    if (!tripSnapshot.exists()) throw new Error('Trip no longer exists. Refresh and try again.');
+    const persistedStatus = String(tripSnapshot.data().status || 'OPEN');
+    if (persistedStatus !== trip.status && !expectedStatuses.includes(persistedStatus)) {
+      throw new Error(`Trip status changed to ${persistedStatus}. Refresh before updating it.`);
+    }
+
+    const driverSnapshot = driverRef ? await transaction.get(driverRef) : null;
+    const tripUpdates: Record<string, unknown> = {
+      status: trip.status,
+      updated_at: trip.updated_at,
+    };
+    if (trip.started_at !== undefined) tripUpdates.started_at = trip.started_at;
+    if (trip.completed_at !== undefined) tripUpdates.completed_at = trip.completed_at;
+    if (trip.final_fare !== undefined) tripUpdates.final_fare = trip.final_fare;
+    if (trip.distance_km !== undefined) tripUpdates.distance_km = trip.distance_km;
+    if (trip.duration_seconds !== undefined) tripUpdates.duration_seconds = trip.duration_seconds;
+    if (trip.waiting_seconds !== undefined) tripUpdates.waiting_seconds = trip.waiting_seconds;
+    if (trip.tracking_enabled !== undefined) tripUpdates.tracking_enabled = trip.tracking_enabled;
+    if (trip.notes !== undefined) tripUpdates.notes = trip.notes;
+    if (trip.status === 'OPEN') {
+      tripUpdates.driver_id = null;
+      tripUpdates.driver_name = null;
+      tripUpdates.driver_phone = null;
+      tripUpdates.vehicle_number = null;
+    }
+    transaction.update(tripRef, tripUpdates);
+
+    if (driverRef && driverSnapshot?.exists()) {
+      const driverUpdates: Record<string, unknown> = {
+        current_trip_id: null,
+        updated_at: serverTimestamp(),
+      };
+      if (incrementDriverTrips) {
+        driverUpdates.total_trips = Number(driverSnapshot.data().total_trips || 0) + 1;
+      }
+      transaction.update(driverRef, driverUpdates);
+    }
+    if (
+      trip.tracking_token &&
+      (trip.status === 'COMPLETED' || trip.status === 'CANCELLED')
+    ) {
+      transaction.set(doc(db, 'tracking_sessions', trip.tracking_token), {
+        is_active: false,
+        disabled_at: Date.now(),
+      }, { merge: true });
+    }
+  });
+}
+
+/** Atomically edits a trip and synchronizes old/new driver availability. */
+export async function updateTripDetailsAtomically(
+  config: FirebaseConnectionConfig,
+  originalTrip: FirestoreTrip,
+  updatedTrip: FirestoreTrip,
+  oldDriver?: FirestoreDriver | null,
+  newDriver?: FirestoreDriver | null
+): Promise<void> {
+  const { db } = getOrCreateFirebaseInstance(config);
+  if (!db || !originalTrip.doc_id) throw new Error('Trip database record is unavailable.');
+
+  const tripRef = doc(db, 'trips', originalTrip.doc_id);
+  const oldDriverRef = oldDriver ? doc(db, 'drivers', oldDriver.doc_id || oldDriver.driver_id) : null;
+  const newDriverRef = newDriver ? doc(db, 'drivers', newDriver.doc_id || newDriver.driver_id) : null;
+  await runTransaction(db, async (transaction) => {
+    const tripSnapshot = await transaction.get(tripRef);
+    const oldDriverSnapshot = oldDriverRef ? await transaction.get(oldDriverRef) : null;
+    const newDriverSnapshot = newDriverRef && newDriverRef.path !== oldDriverRef?.path
+      ? await transaction.get(newDriverRef)
+      : oldDriverSnapshot;
+    if (!tripSnapshot.exists()) throw new Error('Trip no longer exists. Refresh and try again.');
+
+    const persisted = tripSnapshot.data();
+    if ((persisted.driver_id || null) !== (originalTrip.driver_id || null)) {
+      throw new Error('Trip assignment changed in another session. Refresh before saving.');
+    }
+    if (newDriverSnapshot?.exists()) {
+      const busyTripId = newDriverSnapshot.data().current_trip_id;
+      if (busyTripId && busyTripId !== originalTrip.trip_id && busyTripId !== originalTrip.doc_id) {
+        throw new Error('The selected driver was assigned to another trip.');
+      }
+    }
+
+    transaction.set(tripRef, serializeTripForFirestore(updatedTrip), { merge: true });
+    if (oldDriverRef && oldDriverRef.path !== newDriverRef?.path && oldDriverSnapshot?.exists()) {
+      transaction.update(oldDriverRef, { current_trip_id: null, updated_at: serverTimestamp() });
+    }
+    if (newDriverRef && newDriverSnapshot?.exists()) {
+      const terminal = updatedTrip.status === 'COMPLETED' || updatedTrip.status === 'CANCELLED';
+      transaction.update(newDriverRef, {
+        current_trip_id: terminal ? null : updatedTrip.trip_id,
+        updated_at: serverTimestamp(),
+      });
+    }
+  });
 }
 
 /**
@@ -1082,7 +1150,6 @@ export async function updateSystemSettingsInFirestore(
       broadcast_notice: settings.broadcast_notice || '',
       emergency_mode: settings.emergency_mode || false,
       driver_app_min_version: settings.driver_app_min_version || '2.4.0',
-      admin_secret: 'cab_admin_secret_auth',
     };
 
     // Single document write: system_settings/dispatch_control
@@ -1120,20 +1187,6 @@ export async function updateSystemSettingsInFirestore(
 }
 
 /**
- * Ensures the drivers table is clean and contains only real drivers,
- * removing any legacy _fleet_dispatch_control document if present.
- */
-export async function cleanUpLegacyDriverControlInFirestore(config: FirebaseConnectionConfig): Promise<void> {
-  try {
-    const { db } = getOrCreateFirebaseInstance(config);
-    if (!db) return;
-    await deleteDoc(doc(db, 'drivers', '_fleet_dispatch_control'));
-  } catch {
-    // Ignore if document doesn't exist or already cleaned up
-  }
-}
-
-/**
  * Creates an optional tracking session for a customer-requested live tracking link.
  * Only called on explicit admin generation.
  */
@@ -1146,40 +1199,24 @@ export async function createTrackingSessionInFirestore(
     const { db } = getOrCreateFirebaseInstance(config);
     if (!db) return { success: false, error: 'Database not initialized' };
 
-    // 1. Mark the trip document with the active tracking token first (always allowed in trips collection)
-    if (tripDocId) {
-      try {
-        await updateDoc(doc(db, 'trips', tripDocId), {
-          tracking_token: session.token,
-          tracking_enabled: true,
-          tracking_created_at: session.created_at,
-        }).catch(async () => {
-          await setDoc(doc(db, 'trips', tripDocId), {
-            tracking_token: session.token,
-            tracking_enabled: true,
-            tracking_created_at: session.created_at,
-          }, { merge: true });
-        });
-      } catch (tripErr) {
-        handleFirestoreError(tripErr, OperationType.UPDATE, `trips/${tripDocId}`);
-      }
-    }
+    if (!tripDocId) return { success: false, error: 'Trip document ID is required' };
 
-    // 2. Also save to tracking_sessions collection if permitted
-    try {
-      await setDoc(doc(db, 'tracking_sessions', session.token), {
-        token: session.token,
-        trip_id: session.trip_id,
-        created_at: session.created_at,
-        is_active: true,
-        customer_name: session.customer_name || 'Customer',
-        customer_phone: session.customer_phone || '',
-        driver_id: session.driver_id || null,
-      });
-    } catch (sessionErr: any) {
-      // If tracking_sessions collection has stricter rules in legacy deployment, handle gracefully
-      handleFirestoreError(sessionErr, OperationType.CREATE, `tracking_sessions/${session.token}`);
-    }
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'trips', tripDocId), {
+      tracking_token: session.token,
+      tracking_enabled: true,
+      tracking_created_at: session.created_at,
+    }, { merge: true });
+    batch.set(doc(db, 'tracking_sessions', session.token), {
+      token: session.token,
+      trip_id: session.trip_id,
+      created_at: session.created_at,
+      is_active: true,
+      customer_name: session.customer_name || 'Customer',
+      customer_phone: session.customer_phone || '',
+      driver_id: session.driver_id || null,
+    });
+    await batch.commit();
 
     return { success: true };
   } catch (err: any) {
@@ -1200,35 +1237,21 @@ export async function disableTrackingSessionInFirestore(
     const { db } = getOrCreateFirebaseInstance(config);
     if (!db) return { success: false, error: 'Database not initialized' };
 
-    // 1. Disable tracking on trip document first (always permitted under trips rules)
-    if (tripDocId) {
-      try {
-        await updateDoc(doc(db, 'trips', tripDocId), {
-          tracking_enabled: false,
-          tracking_disabled_at: Date.now(),
-        }).catch(async () => {
-          await setDoc(doc(db, 'trips', tripDocId), {
-            tracking_enabled: false,
-            tracking_disabled_at: Date.now(),
-          }, { merge: true });
-        });
-      } catch (tripErr: any) {
-        handleFirestoreError(tripErr, OperationType.UPDATE, `trips/${tripDocId}`);
-      }
-    }
+    if (!tripDocId) return { success: false, error: 'Trip document ID is required' };
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'trips', tripDocId), {
+      tracking_enabled: false,
+      tracking_disabled_at: Date.now(),
+    }, { merge: true });
 
     // 2. Deactivate tracking session doc if accessible
     if (token) {
-      try {
-        await setDoc(doc(db, 'tracking_sessions', token), {
-          is_active: false,
-          disabled_at: Date.now(),
-        }, { merge: true });
-      } catch (sessionErr: any) {
-        // If tracking_sessions collection has stricter rules, handle gracefully without logging an error
-        handleFirestoreError(sessionErr, OperationType.UPDATE, `tracking_sessions/${token}`);
-      }
+      batch.set(doc(db, 'tracking_sessions', token), {
+        is_active: false,
+        disabled_at: Date.now(),
+      }, { merge: true });
     }
+    await batch.commit();
 
     return { success: true };
   } catch (err: any) {
@@ -1339,16 +1362,16 @@ export function subscribeToCustomerTrackingSession(
     const handleTripUpdate = (liveTrip: FirestoreTrip) => {
       currentTrip = liveTrip;
 
-      // CRITICAL: Only expire if status is COMPLETED or CANCELLED!
-      // In-process trips (IN_PROGRESS, ACCEPTED, OPEN) MUST NEVER EXPIRE!
       const isFinished = liveTrip.status === 'COMPLETED' || liveTrip.status === 'CANCELLED';
+      const isRevoked = liveTrip.tracking_enabled === false || currentSession?.is_active === false;
+      const isExpired = isFinished || isRevoked;
 
       if (!currentSession) {
         currentSession = {
           token,
           trip_id: liveTrip.trip_id,
           created_at: liveTrip.created_at,
-          is_active: !isFinished,
+          is_active: !isExpired,
           customer_name: liveTrip.customer_name,
           customer_phone: liveTrip.customer_phone,
           driver_id: liveTrip.driver_id,
@@ -1357,38 +1380,60 @@ export function subscribeToCustomerTrackingSession(
 
       // If driver is assigned and ride not completed, stream live GPS
       const activeDriverId = liveTrip.driver_id;
-      if (activeDriverId && activeDriverId !== currentDriverId && !isFinished) {
+      if (activeDriverId && activeDriverId !== currentDriverId && !isExpired) {
         if (unsubDriver) unsubDriver();
         currentDriverId = activeDriverId;
+
+        const applyDriverSnapshot = (driverSnap: any) => {
+          const dData = driverSnap.data();
+          currentDriver = {
+            doc_id: driverSnap.id,
+            driver_id: dData.driver_id || driverSnap.id,
+            driver_name: dData.driver_name || dData.name || '',
+            mobile_number: dData.mobile_number || dData.driver_mobile || dData.phone || '',
+            vehicle_number: dData.vehicle_number || dData.vehicle_no || '',
+            vehicle_category: dData.vehicle_category || dData.vehicle_type || 'Mini',
+            status: dData.status || 'ACTIVE',
+            is_online: Boolean(dData.is_online),
+            latitude: typeof dData.latitude === 'number' ? dData.latitude : null,
+            longitude: typeof dData.longitude === 'number' ? dData.longitude : null,
+            photo_url: dData.photo_url || '',
+            expiry_date: dData.expiry_date || '',
+            photo_version: Number(dData.photo_version || 1),
+            device_id: dData.device_id || '',
+            rating: typeof dData.rating === 'number' ? dData.rating : 4.9,
+            total_trips: typeof dData.total_trips === 'number' ? dData.total_trips : 0,
+          };
+          onUpdate({
+            session: currentSession,
+            trip: currentTrip,
+            driver: currentDriver,
+            isExpired: false,
+          });
+        };
+
         unsubDriver = onSnapshot(
           doc(db, 'drivers', activeDriverId),
           (driverSnap) => {
-            if (isTornDown || !driverSnap.exists()) return;
-            const dData = driverSnap.data();
-            currentDriver = {
-              doc_id: driverSnap.id,
-              driver_id: dData.driver_id || driverSnap.id,
-              driver_name: dData.driver_name || dData.name || '',
-              mobile_number: dData.mobile_number || '',
-              vehicle_number: dData.vehicle_number || '',
-              vehicle_category: dData.vehicle_category || 'Mini',
-              status: dData.status || 'ACTIVE',
-              is_online: Boolean(dData.is_online),
-              latitude: typeof dData.latitude === 'number' ? dData.latitude : null,
-              longitude: typeof dData.longitude === 'number' ? dData.longitude : null,
-              photo_url: dData.photo_url || '',
-              expiry_date: dData.expiry_date || '',
-              photo_version: Number(dData.photo_version || 1),
-              device_id: dData.device_id || '',
-              rating: typeof dData.rating === 'number' ? dData.rating : 4.9,
-              total_trips: typeof dData.total_trips === 'number' ? dData.total_trips : 0,
-            };
-            onUpdate({
-              session: currentSession,
-              trip: currentTrip,
-              driver: currentDriver,
-              isExpired: false,
-            });
+            if (isTornDown) return;
+            if (driverSnap.exists()) {
+              applyDriverSnapshot(driverSnap);
+              return;
+            }
+
+            // Some projects store the driver's canonical ID in a field while
+            // using a different Firestore document ID. Resolve that existing
+            // record without adding a second live listener when the direct ID
+            // lookup succeeds.
+            if (unsubDriver) unsubDriver();
+            unsubDriver = onSnapshot(
+              query(collection(db, 'drivers'), where('driver_id', '==', activeDriverId), limit(1)),
+              (driverSnapQuery) => {
+                if (isTornDown || driverSnapQuery.empty) return;
+                applyDriverSnapshot(driverSnapQuery.docs[0]);
+              },
+              (err) => console.warn('Driver tracking query note:', err)
+            );
           },
           (err) => console.warn('Driver tracking listener note:', err)
         );
@@ -1398,15 +1443,17 @@ export function subscribeToCustomerTrackingSession(
         session: currentSession,
         trip: currentTrip,
         driver: currentDriver,
-        isExpired: isFinished,
-        reason: isFinished
+        isExpired,
+        reason: isRevoked
+          ? 'This tracking link has been disabled by dispatch.'
+          : isFinished
           ? liveTrip.status === 'COMPLETED'
             ? 'This ride has completed. Thank you for traveling with us!'
             : 'This trip has been cancelled.'
           : undefined,
       });
 
-      if (isFinished) {
+      if (isExpired) {
         teardown();
       }
     };
@@ -1509,107 +1556,5 @@ export function subscribeToCustomerTrackingSession(
   }
 
   return teardown;
-}
-
-/**
- * Auto-sweep uninstalled/dead drivers every 30 seconds.
- * Checks for drivers currently marked online (is_online == true).
- * If heartbeat stopped for >75s, the driver uninstalled the app or closed/turned off their phone,
- * so we automatically mark them OFFLINE, reset last_heartbeat to 0, and clear device_id.
- *
- * Supports both modular Firestore instance, compat Firestore instance (firebase.firestore()),
- * or FirebaseConnectionConfig.
- */
-export function startUninstalledDriversCleaner(
-  dbOrConfig?: any,
-  onDriverOffline?: (driverId: string) => void
-): () => void {
-  const sweep = async () => {
-    try {
-      let firestoreDb: Firestore | null = null;
-      let isCompat = false;
-
-      if (dbOrConfig && typeof dbOrConfig.collection === 'function') {
-        // Compat Firestore instance passed, e.g. firebase.firestore()
-        isCompat = true;
-      } else if (dbOrConfig && dbOrConfig.apiKey) {
-        // FirebaseConnectionConfig passed
-        const { db } = getOrCreateFirebaseInstance(dbOrConfig);
-        firestoreDb = db;
-      } else if (dbOrConfig && typeof dbOrConfig.type === 'string') {
-        // Modular Firestore instance passed
-        firestoreDb = dbOrConfig;
-      } else {
-        const { db } = getOrCreateFirebaseInstance(DEFAULT_FIREBASE_CONFIG);
-        firestoreDb = db;
-      }
-
-      const cutoffTime = Date.now() - 75000; // 75 seconds threshold
-
-      if (isCompat && dbOrConfig) {
-        const onlineDriversSnapshot = await dbOrConfig
-          .collection('drivers')
-          .where('is_online', '==', true)
-          .get();
-
-        onlineDriversSnapshot.forEach(async (docSnap: any) => {
-          const data = docSnap.data();
-          const heartbeat = data.last_heartbeat || data.last_seen || 0;
-
-          // If heartbeat stopped for >75s, app was uninstalled or phone turned off
-          if (heartbeat > 0 && heartbeat < cutoffTime) {
-            console.log(`Driver ${docSnap.id} uninstalled or closed. Marking OFFLINE.`);
-            await docSnap.ref.update({
-              is_online: false,
-              last_heartbeat: 0,
-              device_id: '',
-            });
-            if (onDriverOffline) {
-              onDriverOffline(docSnap.id);
-            }
-          }
-        });
-      } else if (firestoreDb) {
-        const onlineDriversQuery = query(
-          collection(firestoreDb, 'drivers'),
-          where('is_online', '==', true)
-        );
-        const onlineDriversSnapshot = await getDocs(onlineDriversQuery);
-
-        for (const docSnap of onlineDriversSnapshot.docs) {
-          const data = docSnap.data();
-          const heartbeat = data.last_heartbeat || data.last_seen || 0;
-
-          // If heartbeat stopped for >75s, app was uninstalled or phone turned off
-          if (heartbeat > 0 && heartbeat < cutoffTime) {
-            console.log(`Driver ${docSnap.id} uninstalled or closed. Marking OFFLINE.`);
-            await updateDoc(docSnap.ref, {
-              is_online: false,
-              last_heartbeat: 0,
-              device_id: '',
-            });
-            if (onDriverOffline) {
-              onDriverOffline(docSnap.id);
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Error auto-sweeping offline drivers:', err);
-    }
-  };
-
-  // Immediate sweep run on start
-  sweep().catch(() => {});
-
-  // Check every 30 seconds
-  const intervalId = setInterval(sweep, 30000);
-
-  return () => clearInterval(intervalId);
-}
-
-// Global browser window attachment for testing or script access
-if (typeof window !== 'undefined') {
-  (window as any).startUninstalledDriversCleaner = startUninstalledDriversCleaner;
 }
 

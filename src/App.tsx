@@ -14,7 +14,8 @@ import { LoginPage } from './components/auth/LoginPage';
 import { PrivacyPolicyPage } from './components/PrivacyPolicyPage';
 import { AccountDeletionPage } from './components/AccountDeletionPage';
 import { ParsedBookingData } from './services/bookingParser';
-import { X, Plus, Loader2 } from 'lucide-react';
+import { getStoredFirebaseConfig } from './firebase/config';
+import { Loader2 } from 'lucide-react';
 
 // Code-split heavy views & third-party libraries (Leaflet, Recharts) for instant initial load & zero lag
 const LiveFleetMap = lazy(() => import('./components/LiveFleetMap').then((m) => ({ default: m.LiveFleetMap })));
@@ -195,12 +196,73 @@ function isAccountDeletionUrl(): boolean {
   return false;
 }
 
+function hasLegacyAdminSession(): boolean {
+  return (
+    localStorage.getItem('fleet_console_auth') === 'true' ||
+    sessionStorage.getItem('fleet_console_auth') === 'true'
+  );
+}
+
+function getEditTripRouteId(): string | null {
+  if (typeof window === 'undefined') return null;
+  const match = window.location.pathname.match(/^\/trips\/([^/]+)\/edit\/?$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/**
+ * Public/authentication router. Keeping this component separate is important:
+ * useCabData is mounted only inside the authenticated console, so public legal,
+ * login, and customer tracking pages cannot start global admin subscriptions.
+ */
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(hasLegacyAdminSession);
+  const [routeVersion, setRouteVersion] = useState(0);
+
+  useEffect(() => {
+    const handleLocationChange = () => setRouteVersion((value) => value + 1);
+    window.addEventListener('popstate', handleLocationChange);
+    window.addEventListener('hashchange', handleLocationChange);
+    return () => {
+      window.removeEventListener('popstate', handleLocationChange);
+      window.removeEventListener('hashchange', handleLocationChange);
+    };
+  }, []);
+
+  void routeVersion;
+  if (isPrivacyPolicyUrl()) return <PrivacyPolicyPage />;
+  if (isAccountDeletionUrl()) return <AccountDeletionPage />;
+
+  const trackingToken = extractTrackingTokenFromUrl();
+  if (trackingToken) {
+    return (
+      <Suspense fallback={<TabLoadingSkeleton />}>
+        <CustomerLiveTracking
+          token={trackingToken.trim()}
+          firebaseConfig={getStoredFirebaseConfig()}
+          isPreview={false}
+        />
+      </Suspense>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginPage onLoginSuccess={(rememberMe) => {
+      if (rememberMe) localStorage.setItem('fleet_console_auth', 'true');
+      else sessionStorage.setItem('fleet_console_auth', 'true');
+      setIsAuthenticated(true);
+    }} />;
+  }
+
+  return <AdminApplication onSessionEnded={() => setIsAuthenticated(false)} />;
+}
+
+function AdminApplication({ onSessionEnded }: { onSessionEnded: () => void }) {
   const [activeTab, setActiveTab] = useState<AdminTab>('dispatch');
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
   const [isMenuDrawerOpen, setIsMenuDrawerOpen] = useState(false);
   const [isPrivacyRoute, setIsPrivacyRoute] = useState<boolean>(() => isPrivacyPolicyUrl());
   const [isAccountDeletionRoute, setIsAccountDeletionRoute] = useState<boolean>(() => isAccountDeletionUrl());
+  const [editTripRouteId, setEditTripRouteId] = useState<string | null>(() => getEditTripRouteId());
 
   // Authentication State (Configured via VITE_ADMIN_PASSWORD in .env)
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
@@ -210,10 +272,9 @@ export default function App() {
     );
   });
 
-  const handleLoginSuccess = (_rememberMe?: boolean) => {
-    // Always persist to localStorage so the user is never asked to repeatedly log in
-    localStorage.setItem('fleet_console_auth', 'true');
-    sessionStorage.setItem('fleet_console_auth', 'true');
+  const handleLoginSuccess = (rememberMe: boolean = false) => {
+    if (rememberMe) localStorage.setItem('fleet_console_auth', 'true');
+    else sessionStorage.setItem('fleet_console_auth', 'true');
     setIsAuthenticated(true);
   };
 
@@ -221,6 +282,7 @@ export default function App() {
     localStorage.removeItem('fleet_console_auth');
     sessionStorage.removeItem('fleet_console_auth');
     setIsAuthenticated(false);
+    onSessionEnded();
   };
 
   // Modals state
@@ -237,7 +299,6 @@ export default function App() {
     setIsSettingsModalOpen(true);
   };
   const [tripToAssign, setTripToAssign] = useState<FirestoreTrip | null>(null);
-  const [tripToEdit, setTripToEdit] = useState<FirestoreTrip | null>(null);
   const [tripToComplete, setTripToComplete] = useState<FirestoreTrip | null>(null);
   const [tripForTracking, setTripForTracking] = useState<FirestoreTrip | null>(null);
   const [previewTrackingToken, setPreviewTrackingToken] = useState<string | null>(null);
@@ -250,6 +311,7 @@ export default function App() {
     const handleLocationChange = () => {
       setIsPrivacyRoute(isPrivacyPolicyUrl());
       setIsAccountDeletionRoute(isAccountDeletionUrl());
+      setEditTripRouteId(getEditTripRouteId());
       const token = extractTrackingTokenFromUrl();
       if (token) {
         setUrlTrackingToken(token);
@@ -304,6 +366,27 @@ export default function App() {
     updateRateCard,
     updateFirebaseConfig,
   } = useCabData();
+
+  const openEditTripPage = (trip: FirestoreTrip) => {
+    const tripId = trip.doc_id || trip.trip_id;
+    if (!tripId) return;
+    window.history.pushState(
+      { ...(window.history.state || {}), editTripReturnPath: window.location.pathname + window.location.search },
+      '',
+      `/trips/${encodeURIComponent(tripId)}/edit`
+    );
+    setEditTripRouteId(tripId);
+  };
+
+  const closeEditTripPage = () => {
+    const returnPath = window.history.state?.editTripReturnPath || '/';
+    window.history.replaceState({}, '', returnPath);
+    setEditTripRouteId(getEditTripRouteId());
+  };
+
+  const editTrip = editTripRouteId
+    ? trips.find((candidate) => candidate.doc_id === editTripRouteId || candidate.trip_id === editTripRouteId) || null
+    : null;
 
   // Idle prefetching of secondary tabs for instantaneous switching without lag
   useEffect(() => {
@@ -393,10 +476,9 @@ export default function App() {
               setPreviewTrackingToken(null);
               setPreviewTrip(null);
             }}
-            className="px-3.5 py-1.5 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg transition flex items-center gap-1.5 cursor-pointer border border-amber-600/40"
+            className="h-9 whitespace-nowrap rounded-lg border border-[#FECACA] bg-white px-3.5 text-[13px] font-medium text-[#DC2626] transition hover:bg-[#FEF2F2] cursor-pointer"
             title="Exit Dispatcher Preview"
           >
-            <X className="w-3.5 h-3.5" />
             <span>Close Preview</span>
           </button>
         </div>
@@ -473,7 +555,53 @@ export default function App() {
         />
 
         {/* Main Content Area with safe padding for mobile bottom dock */}
-        <main className="flex-1 w-full max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8 py-3.5 sm:py-6 pb-28 sm:pb-8 min-w-0">
+        <main className={`flex-1 w-full mx-auto min-w-0 ${editTripRouteId || isNewDriverModalOpen ? 'max-w-none px-0 py-0 pb-0' : `max-w-7xl px-2.5 sm:px-6 min-[768px]:max-[1024px]:max-w-[960px] min-[768px]:max-[1024px]:px-5 min-[768px]:max-[1024px]:py-5 lg:px-6 xl:px-8 2xl:px-10 py-3.5 sm:py-6 pb-28 sm:pb-8 ${activeTab === 'radar' ? 'lg:max-w-[1760px]' : activeTab === 'dispatch' || activeTab === 'drivers' || activeTab === 'trips' ? 'lg:max-w-[1600px]' : 'lg:max-w-[1440px]'}`}`}>
+          {isNewDriverModalOpen ? (
+            <Suspense fallback={<TabLoadingSkeleton />}>
+              <NewDriverModal
+                isOpen
+                onClose={() => setIsNewDriverModalOpen(false)}
+                onSubmit={registerDriver}
+              />
+            </Suspense>
+          ) : editTripRouteId ? (
+            <Suspense fallback={<TabLoadingSkeleton />}>
+              {editTrip ? (
+                <EditTripModal
+                  isOpen
+                  presentation="page"
+                  trip={editTrip}
+                  drivers={drivers}
+                  trips={trips}
+                  onClose={closeEditTripPage}
+                  onSave={updateTripDetails}
+                  onUnassignDriver={unassignDriverFromTrip}
+                  onCancelTrip={cancelTrip}
+                  onOpenTrackingModal={(selectedTrip) => setTripForTracking(selectedTrip)}
+                  onGenerateTrackingLink={generateCustomerTrackingLink}
+                />
+              ) : (
+                <div className="min-h-[calc(100dvh-5rem)] flex items-center justify-center px-4">
+                  <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+                    <h1 className="text-lg font-bold text-slate-900">Edit Trip</h1>
+                    <p className="mt-2 text-sm text-slate-500">
+                      {trips.length === 0 && isSyncing
+                        ? 'Loading trip details...'
+                        : 'This trip could not be found.'}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={closeEditTripPage}
+                      className="mt-5 min-h-[44px] rounded-lg bg-[#FF9800] px-4 py-2 text-sm font-bold text-white hover:bg-[#e68900]"
+                    >
+                      Back to Trips
+                    </button>
+                  </div>
+                </div>
+              )}
+            </Suspense>
+          ) : (
+            <>
           {activeTab === 'dispatch' && (
             <DispatchBoard
               trips={trips}
@@ -484,7 +612,7 @@ export default function App() {
               }}
               onOpenPasteBookingModal={() => setIsPasteBookingModalOpen(true)}
               onOpenAssignModal={(trip) => setTripToAssign(trip)}
-              onOpenEditModal={(trip) => setTripToEdit(trip)}
+              onOpenEditModal={openEditTripPage}
               onOpenCompleteModal={(trip) => setTripToComplete(trip)}
               onOpenTrackingModal={(trip) => setTripForTracking(trip)}
               onStartTripWithOtp={startTripWithOtp}
@@ -540,6 +668,7 @@ export default function App() {
                 onDeleteTrip={deleteTrip}
                 globalSearchQuery={globalSearchQuery}
                 onOpenTrackingModal={(trip) => setTripForTracking(trip)}
+                onOpenEditTrip={openEditTripPage}
                 onSetDriverOfficeDue={setDriverOfficeDue}
                 onClearDriverOfficeDue={clearDriverOfficeDue}
                 onClearLocalTripStorage={clearLocalTripsStorage}
@@ -547,31 +676,23 @@ export default function App() {
               />
             )}
           </Suspense>
+            </>
+          )}
         </main>
       </div>
 
-      {/* Floating Action Button (FAB) for 1-Tap Fast Dispatch on Mobile */}
-      {activeTab === 'dispatch' && !isNewTripModalOpen && (
-        <button
-          onClick={() => setIsNewTripModalOpen(true)}
-          className="sm:hidden fixed bottom-20 right-4 z-40 bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-slate-950 font-black px-4 py-3 rounded-full shadow-lg shadow-amber-500/30 flex items-center gap-2 border border-amber-300 cursor-pointer min-h-[48px]"
-          aria-label="Dispatch New Ride"
-        >
-          <Plus className="w-5 h-5 stroke-[3]" />
-          <span className="text-xs font-black tracking-wide">New Ride</span>
-        </button>
-      )}
-
       {/* Native App-Style Mobile Bottom Navigation Dock (Image 3 style) */}
-      <MobileBottomNav
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        onOpenMenuDrawer={() => setIsMenuDrawerOpen(true)}
-        openTripCount={openTripCount}
-        onlineDriverCount={onlineDriverCount}
-        systemSettings={systemSettings}
-        isMenuDrawerOpen={isMenuDrawerOpen}
-      />
+      {!editTripRouteId && !isNewDriverModalOpen && (
+        <MobileBottomNav
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          onOpenMenuDrawer={() => setIsMenuDrawerOpen(true)}
+          openTripCount={openTripCount}
+          onlineDriverCount={onlineDriverCount}
+          systemSettings={systemSettings}
+          isMenuDrawerOpen={isMenuDrawerOpen}
+        />
+      )}
 
       {/* On-Demand Modals wrapped in Suspense for ultra-lean initial bundle */}
       <Suspense fallback={null}>
@@ -603,14 +724,6 @@ export default function App() {
           />
         )}
 
-        {isNewDriverModalOpen && (
-          <NewDriverModal
-            isOpen={isNewDriverModalOpen}
-            onClose={() => setIsNewDriverModalOpen(false)}
-            onSubmit={registerDriver}
-          />
-        )}
-
         {tripToAssign && (
           <AssignDriverModal
             trip={tripToAssign}
@@ -618,21 +731,6 @@ export default function App() {
             trips={trips}
             onClose={() => setTripToAssign(null)}
             onAssign={assignDriverToTrip}
-          />
-        )}
-
-        {tripToEdit && (
-          <EditTripModal
-            isOpen={Boolean(tripToEdit)}
-            trip={tripToEdit}
-            drivers={drivers}
-            trips={trips}
-            onClose={() => setTripToEdit(null)}
-            onSave={updateTripDetails}
-            onUnassignDriver={unassignDriverFromTrip}
-            onCancelTrip={cancelTrip}
-            onOpenTrackingModal={(trip) => setTripForTracking(trip)}
-            onGenerateTrackingLink={generateCustomerTrackingLink}
           />
         )}
 

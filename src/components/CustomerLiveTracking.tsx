@@ -3,24 +3,6 @@ import { FirestoreTrip, FirestoreDriver, CustomerTrackingSession, FirebaseConnec
 import { subscribeToCustomerTrackingSession } from '../firebase/config';
 import { loadGoogleMaps } from '../services/googleMapsService';
 import { getCarIconDataUrl } from '../utils/carIcon';
-import {
-  Car,
-  MapPin,
-  Phone,
-  Shield,
-  Clock,
-  Navigation,
-  CheckCircle2,
-  AlertTriangle,
-  Star,
-  KeyRound,
-  ExternalLink,
-  ChevronRight,
-  ArrowLeft,
-  Sparkles,
-  Layers,
-  Compass,
-} from 'lucide-react';
 
 interface CustomerLiveTrackingProps {
   token: string;
@@ -84,7 +66,15 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
   const leafletDropMarkerRef = useRef<any>(null);
 
   const currentTrip = trip || matchedTrip;
+  const matchedTripRef = useRef<FirestoreTrip | null>(matchedTrip || null);
+  const fallbackDriverRef = useRef<FirestoreDriver | null>(fallbackDriver || null);
+  matchedTripRef.current = matchedTrip || null;
+  fallbackDriverRef.current = fallbackDriver || null;
   const hasInitialFitBoundsRef = useRef(false);
+  const hasInitialDriverCameraRef = useRef(false);
+  const shouldFollowDriverRef = useRef(true);
+  const googleCameraListenersAttachedRef = useRef(false);
+  const leafletCameraListenersAttachedRef = useRef(false);
   const driverAnimFrameRef = useRef<number | null>(null);
   const lastTripIdRef = useRef<string | null>(null);
 
@@ -93,6 +83,8 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
     if (currentTrip?.trip_id && currentTrip.trip_id !== lastTripIdRef.current) {
       lastTripIdRef.current = currentTrip.trip_id;
       hasInitialFitBoundsRef.current = false;
+      hasInitialDriverCameraRef.current = false;
+      shouldFollowDriverRef.current = true;
     }
   }, [currentTrip?.trip_id]);
 
@@ -115,6 +107,7 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
   // 1. Subscribe to ONLY this specific tracking token & trip
   useEffect(() => {
     setIsLoading(true);
+    let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const unsub = subscribeToCustomerTrackingSession(
       firebaseConfig,
@@ -124,12 +117,12 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
         if (s) setSession(s);
         if (t) {
           setTrip(t);
-          // Trip is present: ONLY expired if status is COMPLETED or CANCELLED!
-          const isDone = t.status === 'COMPLETED' || t.status === 'CANCELLED';
-          setIsExpired(isDone);
+          setIsExpired(exp || t.tracking_enabled === false);
+          if (reason) setExpiryReason(reason);
         } else if (exp) {
           // If we already have an active trip from fallbackTrip or allTrips, NEVER mark as expired!
-          if (!matchedTrip || matchedTrip.status === 'COMPLETED' || matchedTrip.status === 'CANCELLED') {
+          const fallback = matchedTripRef.current;
+          if (!fallback || fallback.status === 'COMPLETED' || fallback.status === 'CANCELLED') {
             setIsExpired(true);
             if (reason) setExpiryReason(reason);
           }
@@ -140,15 +133,17 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
         console.warn('Customer tracking subscribe notice:', err);
         setIsLoading(false);
         // If local fallback trip exists and matches token, keep using it
-        if (matchedTrip) {
-          setTrip(matchedTrip);
-          if (fallbackDriver) setDriver(fallbackDriver);
-          setIsExpired(matchedTrip.status === 'COMPLETED' || matchedTrip.status === 'CANCELLED');
+        const fallback = matchedTripRef.current;
+        const fallbackDriverValue = fallbackDriverRef.current;
+        if (fallback) {
+          setTrip(fallback);
+          if (fallbackDriverValue) setDriver(fallbackDriverValue);
+          setIsExpired(fallback.status === 'COMPLETED' || fallback.status === 'CANCELLED');
         } else {
           // If no trip loaded yet, wait briefly before expiring
-          setTimeout(() => {
+          expiryTimer = setTimeout(() => {
             setTrip((currentT) => {
-              if (!currentT && !matchedTrip) {
+              if (!currentT && !matchedTripRef.current) {
                 setIsExpired(true);
                 setExpiryReason('Unable to load live tracking session.');
               }
@@ -160,11 +155,12 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
     );
 
     return () => {
+      if (expiryTimer) clearTimeout(expiryTimer);
       if (typeof unsub === 'function') {
         unsub();
       }
     };
-  }, [token, firebaseConfig, matchedTrip, fallbackDriver]);
+  }, [token, firebaseConfig]);
 
   // Compute live ETA based on distance and trip status
   useEffect(() => {
@@ -190,15 +186,34 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
   // 2. Initialize Map (Google Maps first, falling back smoothly to Leaflet OpenStreetMap)
   useEffect(() => {
     let isCancelled = false;
+    let resizeObserver: ResizeObserver | null = null;
+    let resizeFrame: number | null = null;
+
+    const refreshGoogleMapSize = () => {
+      if (!googleMapRef.current || !mapContainerRef.current) return;
+      if (mapContainerRef.current.clientWidth === 0 || mapContainerRef.current.clientHeight === 0) return;
+      const google = (window as any).google;
+      if (google?.maps?.event) {
+        google.maps.event.trigger(googleMapRef.current, 'resize');
+      }
+    };
 
     async function initMap() {
+      // The admin preview is mounted conditionally. Wait one frame so Google Maps
+      // sees the final, visible container dimensions instead of a zero-sized node.
+      await new Promise<void>((resolve) => {
+        resizeFrame = requestAnimationFrame(() => resolve());
+      });
+      if (isCancelled || !mapContainerRef.current) return;
+
       const pickupLat = currentTrip?.pickup_lat ?? 11.0168;
       const pickupLng = currentTrip?.pickup_lng ?? 76.9558;
       const center = { lat: pickupLat, lng: pickupLng };
 
-      const driverLat = driver?.latitude ?? (currentTrip?.status === 'IN_PROGRESS' ? pickupLat + 0.005 : pickupLat - 0.006);
-      const driverLng = driver?.longitude ?? (currentTrip?.status === 'IN_PROGRESS' ? pickupLng + 0.005 : pickupLng - 0.006);
-      const driverPos = { lat: driverLat, lng: driverLng };
+      const driverHasValidLocation = Number.isFinite(driver?.latitude) && Number.isFinite(driver?.longitude);
+      const driverPos = driverHasValidLocation
+        ? { lat: driver.latitude as number, lng: driver.longitude as number }
+        : null;
 
       // Pure 3D White Car ONLY (no top small icon, no floating badge)
       const carIconDataUrl = getCarIconDataUrl({
@@ -216,7 +231,7 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
 
           if (!googleMapRef.current) {
             googleMapRef.current = new google.maps.Map(mapContainerRef.current, {
-              center,
+              center: driverPos || center,
               zoom: 14,
               disableDefaultUI: true,
               zoomControl: true,
@@ -264,70 +279,95 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
           }
 
           // Driver Car Marker - Pure 3D White Car ONLY (No top icon)
-          const carMarkerIcon = {
-            url: carIconDataUrl,
-            scaledSize: new google.maps.Size(60, 40),
-            anchor: new google.maps.Point(30, 20),
-          };
+          if (driverPos) {
+            const carMarkerIcon = {
+              url: carIconDataUrl,
+              scaledSize: new google.maps.Size(60, 40),
+              anchor: new google.maps.Point(30, 20),
+            };
 
-          if (!driverMarkerRef.current) {
-            driverMarkerRef.current = new google.maps.Marker({
-              position: driverPos,
-              map,
-              title: driver?.driver_name || 'Your Cab',
-              icon: carMarkerIcon,
-            });
-          } else {
-            driverMarkerRef.current.setIcon(carMarkerIcon);
-            // Smoothly glide to new position instead of snapping or jumping
-            const curPos = driverMarkerRef.current.getPosition();
-            if (curPos) {
-              const startLat = curPos.lat();
-              const startLng = curPos.lng();
-              const targetLat = driverPos.lat;
-              const targetLng = driverPos.lng;
-              const delta = Math.hypot(targetLat - startLat, targetLng - startLng);
+            if (!driverMarkerRef.current) {
+              driverMarkerRef.current = new google.maps.Marker({
+                position: driverPos,
+                map,
+                title: driver?.driver_name || 'Your Cab',
+                icon: carMarkerIcon,
+              });
+            } else {
+              driverMarkerRef.current.setVisible(true);
+              driverMarkerRef.current.setIcon(carMarkerIcon);
+              // Smoothly glide to new position instead of snapping or jumping
+              const curPos = driverMarkerRef.current.getPosition();
+              if (curPos) {
+                const startLat = curPos.lat();
+                const startLng = curPos.lng();
+                const targetLat = driverPos.lat;
+                const targetLng = driverPos.lng;
+                const delta = Math.hypot(targetLat - startLat, targetLng - startLng);
 
-              if (delta > 0.000005 && delta < 0.05) {
-                if (driverAnimFrameRef.current) {
-                  cancelAnimationFrame(driverAnimFrameRef.current);
-                }
-                const startTime = performance.now();
-                const duration = 30000; // 30 seconds continuous linear movement
-                const step = (now: number) => {
-                  const elapsed = now - startTime;
-                  const progress = Math.min(elapsed / duration, 1);
-                  const ease = progress; // Linear progression for live tracking
-                  driverMarkerRef.current?.setPosition({
-                    lat: startLat + (targetLat - startLat) * ease,
-                    lng: startLng + (targetLng - startLng) * ease,
-                  });
-                  if (progress < 1) {
-                    driverAnimFrameRef.current = requestAnimationFrame(step);
-                  } else {
-                    driverAnimFrameRef.current = null;
+                if (delta > 0.000005 && delta < 0.05) {
+                  if (driverAnimFrameRef.current) {
+                    cancelAnimationFrame(driverAnimFrameRef.current);
                   }
-                };
-                driverAnimFrameRef.current = requestAnimationFrame(step);
-              } else if (delta >= 0.05) {
+                  const startTime = performance.now();
+                  const duration = 30000; // 30 seconds continuous linear movement
+                  const step = (now: number) => {
+                    const elapsed = now - startTime;
+                    const progress = Math.min(elapsed / duration, 1);
+                    const ease = progress; // Linear progression for live tracking
+                    driverMarkerRef.current?.setPosition({
+                      lat: startLat + (targetLat - startLat) * ease,
+                      lng: startLng + (targetLng - startLng) * ease,
+                    });
+                    if (progress < 1) {
+                      driverAnimFrameRef.current = requestAnimationFrame(step);
+                    } else {
+                      driverAnimFrameRef.current = null;
+                    }
+                  };
+                  driverAnimFrameRef.current = requestAnimationFrame(step);
+                } else if (delta >= 0.05) {
+                  driverMarkerRef.current.setPosition(driverPos);
+                }
+              } else {
                 driverMarkerRef.current.setPosition(driverPos);
               }
-            } else {
-              driverMarkerRef.current.setPosition(driverPos);
             }
+          } else if (driverMarkerRef.current) {
+            driverMarkerRef.current.setVisible(false);
           }
 
-          // Fit bounds ONLY ONCE on initial load so the map view does not jump around on every GPS update
-          if (!hasInitialFitBoundsRef.current) {
+          // Focus the driver once at street level, then smoothly follow live GPS updates.
+          if (!hasInitialDriverCameraRef.current && driverPos) {
+            map.setCenter(driverPos);
+            map.setZoom(14);
+            hasInitialDriverCameraRef.current = true;
+          } else if (hasInitialDriverCameraRef.current && driverPos && shouldFollowDriverRef.current) {
+            map.panTo(driverPos);
+          } else if (!hasInitialDriverCameraRef.current && !hasInitialFitBoundsRef.current) {
             const bounds = new google.maps.LatLngBounds();
             bounds.extend(center);
-            bounds.extend(driverPos);
+            if (driverPos) {
+              bounds.extend(driverPos);
+            }
             if (currentTrip?.drop_lat && currentTrip?.drop_lng) {
               bounds.extend({ lat: currentTrip.drop_lat, lng: currentTrip.drop_lng });
             }
             map.fitBounds(bounds, { top: 60, bottom: 60, left: 60, right: 60 });
             hasInitialFitBoundsRef.current = true;
           }
+          if (!googleCameraListenersAttachedRef.current) {
+            google.maps.event.addListener(map, 'dragstart', () => {
+              shouldFollowDriverRef.current = false;
+            });
+            google.maps.event.addListener(map, 'zoom_changed', () => {
+              shouldFollowDriverRef.current = false;
+            });
+            googleCameraListenersAttachedRef.current = true;
+          }
+          refreshGoogleMapSize();
+          resizeObserver = new ResizeObserver(() => refreshGoogleMapSize());
+          resizeObserver.observe(mapContainerRef.current);
           return;
         }
       } catch (err) {
@@ -344,7 +384,7 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
 
         if (!leafletMapRef.current) {
           const map = L.map(mapContainerRef.current, {
-            center: [pickupLat, pickupLng],
+            center: driverPos ? [driverPos.lat, driverPos.lng] : [pickupLat, pickupLng],
             zoom: 14,
             zoomControl: true,
           });
@@ -396,6 +436,7 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
         }
 
         // Driver Car Marker - Pure 3D White Car ONLY (No top icon)
+        if (driverPos) {
         const carIcon = L.divIcon({
           className: 'custom-tracking-car-pin',
           html: `
@@ -419,6 +460,7 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
         if (!leafletDriverMarkerRef.current) {
           leafletDriverMarkerRef.current = L.marker([driverPos.lat, driverPos.lng], { icon: carIcon }).addTo(map);
         } else {
+          leafletDriverMarkerRef.current.setOpacity(1);
           leafletDriverMarkerRef.current.setIcon(carIcon);
           
           const curPos = leafletDriverMarkerRef.current.getLatLng();
@@ -457,10 +499,24 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
             leafletDriverMarkerRef.current.setLatLng([driverPos.lat, driverPos.lng]);
           }
         }
+        } else if (leafletDriverMarkerRef.current) {
+          leafletDriverMarkerRef.current.setOpacity(0);
+        }
 
-        // Fit bounds once
-        if (!hasInitialFitBoundsRef.current) {
-          const latLngs: [number, number][] = [[pickupLat, pickupLng], [driverPos.lat, driverPos.lng]];
+        if (!leafletCameraListenersAttachedRef.current) {
+          map.on('dragstart zoomstart', () => {
+            shouldFollowDriverRef.current = false;
+          });
+          leafletCameraListenersAttachedRef.current = true;
+        }
+        if (driverPos && !hasInitialDriverCameraRef.current) {
+          map.setView([driverPos.lat, driverPos.lng], 14);
+          hasInitialDriverCameraRef.current = true;
+        } else if (driverPos && shouldFollowDriverRef.current) {
+          map.panTo([driverPos.lat, driverPos.lng]);
+        } else if (!hasInitialDriverCameraRef.current && !hasInitialFitBoundsRef.current) {
+          // Preserve the existing fallback view when driver GPS is unavailable.
+          const latLngs: [number, number][] = [[pickupLat, pickupLng]];
           if (currentTrip?.drop_lat && currentTrip?.drop_lng) {
             latLngs.push([currentTrip.drop_lat, currentTrip.drop_lng]);
           }
@@ -477,6 +533,8 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
 
     return () => {
       isCancelled = true;
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+      resizeObserver?.disconnect();
       if (driverAnimFrameRef.current) {
         cancelAnimationFrame(driverAnimFrameRef.current);
       }
@@ -510,30 +568,29 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
   };
 
   const statusInfo = getStatusDisplay();
-  const driverName = currentTrip?.driver_name || driver?.driver_name || fallbackDriver?.driver_name || 'Assigned Driver';
-  const vehiclePlate = currentTrip?.vehicle_number || driver?.vehicle_number || fallbackDriver?.vehicle_number || 'Vehicle Assigned';
-  const vehicleCategory = currentTrip?.vehicle_category || driver?.vehicle_category || fallbackDriver?.vehicle_category || 'Mini';
-  const driverPhone = currentTrip?.driver_phone || driver?.mobile_number || fallbackDriver?.mobile_number;
-  const driverRating = driver?.rating || fallbackDriver?.rating || 4.9;
+  const assignedDriverId = currentTrip?.driver_id || session?.driver_id || fallbackDriver?.driver_id;
+  const normalizedAssignedDriverId = assignedDriverId?.trim().toLowerCase();
+  const assignedDriver = [driver, fallbackDriver].find(
+    (candidate) => {
+      if (!candidate) return false;
+      if (!normalizedAssignedDriverId) return true;
+      return [candidate.driver_id, candidate.doc_id]
+        .filter(Boolean)
+        .some((id) => id?.trim().toLowerCase() === normalizedAssignedDriverId);
+    }
+  ) || null;
+  const driverName = assignedDriver?.driver_name || currentTrip?.driver_name || 'Assigned Driver';
+  const vehiclePlate = assignedDriver?.vehicle_number || currentTrip?.vehicle_number || 'Vehicle Assigned';
+  const vehicleCategory = assignedDriver?.vehicle_category || currentTrip?.vehicle_category || 'Vehicle category unavailable';
+  const driverPhone = assignedDriver?.mobile_number || currentTrip?.driver_phone;
+  const driverRating = assignedDriver?.rating || 4.9;
 
   // Loading screen while initial session handshake completes
   if (isLoading && !currentTrip) {
     return (
-      <div className="relative w-full min-h-screen bg-slate-50 text-slate-900 flex flex-col items-center justify-center p-6 text-center select-none">
-        <div className="w-20 h-14 flex items-center justify-center mb-4 filter drop-shadow-md animate-pulse">
-          <img
-            src="/icons/white-3d-car.svg"
-            alt="Connecting to Cab"
-            className="w-full h-full object-contain"
-            referrerPolicy="no-referrer"
-          />
-        </div>
-        <h2 className="text-lg font-bold text-slate-900 mb-1">
-          Connecting to Live Cab Tracking...
-        </h2>
-        <p className="text-xs text-slate-500 font-mono">
-          Securing encrypted tracking session
-        </p>
+      <div className="relative flex min-h-screen min-h-[100dvh] w-full flex-col items-center justify-center bg-[#FFF8F8] px-6 py-8 pb-[calc(2rem+env(safe-area-inset-bottom))] text-center text-[#111827] select-none">
+        <div className="mb-3 h-6 w-6 animate-spin rounded-full border-2 border-[#FECACA] border-t-[#DC2626]" aria-hidden="true" />
+        <h2 className="text-base font-semibold text-[#111827]">Loading Trip Details</h2>
       </div>
     );
   }
@@ -550,23 +607,19 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
   // If ride is complete, cancelled, or tracking link is expired/disabled:
   if (isLinkExpired) {
     return (
-      <div className="relative w-full min-h-screen bg-slate-50 text-slate-900 flex flex-col items-center justify-center p-6 text-center select-none">
-        <div className="w-full max-w-sm bg-white border border-slate-200 rounded-3xl p-8 shadow-xl text-center">
-          <div className="w-16 h-16 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mb-4 shadow-sm mx-auto">
-            <AlertTriangle className="w-8 h-8" />
-          </div>
-          <h1 className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 mb-2">
-            Your link is expired
+      <div className="relative flex min-h-screen min-h-[100dvh] w-full flex-col items-center justify-center bg-[#FFF8F8] px-6 py-8 pb-[calc(2rem+env(safe-area-inset-bottom))] text-center text-[#111827] select-none">
+        <div className="flex w-full max-w-sm flex-col items-center">
+          <h1 className="mb-2 text-xl font-semibold tracking-tight text-[#111827] sm:text-2xl">
+            Tracking Unavailable
           </h1>
-          <p className="text-sm text-slate-500 mb-6 leading-relaxed">
-            This tracking session has ended or is no longer active.
+          <p className="mb-5 text-sm leading-relaxed text-[#64748B]">
+            This tracking link is no longer active.
           </p>
           <a
             href="tel:+914223596446"
-            className="inline-flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-md transition"
+            className="inline-flex min-h-11 w-full max-w-[220px] items-center justify-center rounded-lg bg-[#DC2626] px-4 py-3 text-sm font-semibold text-white transition hover:bg-red-700"
           >
-            <Phone className="w-4 h-4 text-slate-950" />
-            <span>Call Office: +914223596446</span>
+            Call Office
           </a>
         </div>
       </div>
@@ -574,36 +627,35 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
   }
 
   return (
-    <div className="relative w-full min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans overflow-x-hidden select-none">
+    <div className="relative flex min-h-screen w-full flex-col overflow-x-hidden bg-[#FFF8F8] font-sans text-[#111827] select-none">
       {/* 1. TOP BRANDED HEADER (Light Theme) */}
-      <header className="relative z-30 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-4 py-3 sm:px-6 flex items-center justify-between shadow-xs">
-        <div className="flex items-center gap-2.5">
-          <span className="bg-emerald-50 text-emerald-700 text-[10px] font-bold px-2.5 py-1 rounded-full border border-emerald-200 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+      <header className="relative z-30 flex items-center justify-between border-b border-[#F1DADA] bg-white px-4 py-3 sm:px-6">
+        <div className="flex items-center gap-2">
+          <span className="rounded-lg bg-[#FEE2E2] px-2.5 py-1 text-[10px] font-semibold text-[#DC2626]">
             LIVE
           </span>
         </div>
 
         <div className="flex items-center gap-2">
-          <span className={`text-[11px] font-extrabold px-3 py-1 rounded-full shadow-2xs ${statusInfo.color}`}>
+          <span className="rounded-lg bg-[#FEE2E2] px-3 py-1 text-[11px] font-semibold text-[#DC2626]">
             {statusInfo.label}
           </span>
         </div>
       </header>
 
       {/* 2. MAIN INTERACTIVE MAP / VECTOR RADAR VIEW (Light Theme) */}
-      <div className="relative flex-1 w-full min-h-[420px] bg-slate-200 overflow-hidden">
+      <div className="relative min-h-[420px] flex-1 w-full overflow-hidden bg-[#FEE2E2]">
         {/* Interactive Street Map (Google Maps or Leaflet OpenStreetMap) */}
         <div
           ref={mapContainerRef}
-          className={`absolute inset-0 w-full h-full transition-opacity duration-500 ${
+          className={`!block absolute inset-0 w-full h-full transition-opacity duration-500 ${
             mapEngine !== 'radar' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
           }`}
         />
 
         {/* High-Fidelity Fallback Live Radar Canvas (if network maps not reachable) */}
         {mapEngine === 'radar' && (
-          <div className="absolute inset-0 w-full h-full bg-gradient-to-b from-slate-100 via-slate-50 to-slate-200 flex flex-col items-center justify-center p-4">
+          <div className="absolute inset-0 flex h-full w-full flex-col items-center justify-center bg-gradient-to-b from-[#FFF8F8] via-white to-[#FEE2E2] p-4">
             {/* Background Grid Pattern */}
             <div
               className="absolute inset-0 opacity-25"
@@ -619,7 +671,6 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
               <div className="absolute w-56 h-56 rounded-full border border-amber-500/30 animate-ping opacity-25" />
               <div className="absolute w-40 h-40 rounded-full border border-amber-500/35" />
               <div className="absolute w-24 h-24 rounded-full bg-amber-400/10 border border-amber-500/40" />
-
               {/* Steady Driver Vehicle Center */}
               <div className="relative z-10 flex flex-col items-center">
                 <div className="w-24 h-16 flex items-center justify-center filter drop-shadow-md mb-1">
@@ -656,80 +707,36 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
       </div>
 
       {/* 3. BOTTOM VEHICLE & TRIP DETAILS CARD */}
-      <div className="relative z-30 bg-white rounded-t-3xl shadow-2xl border-t border-slate-200 px-4 pt-5 pb-6 sm:px-6 max-w-3xl mx-auto w-full space-y-4">
-        {/* Drag handle pill */}
-        <div className="w-12 h-1.5 bg-slate-300 rounded-full mx-auto -mt-1 mb-2" />
-
-        {/* Driver Details & Vehicle Number Plate with Call Buttons */}
-        <div className="flex items-start justify-between border-b border-slate-100 pb-4">
-          <div>
-            <div className="flex items-center gap-1.5">
-              <h2 className="font-extrabold text-base text-slate-900 tracking-tight">
-                {driverName}
-              </h2>
-              <span className="bg-emerald-50 text-emerald-700 text-[10px] font-bold px-1.5 py-0.5 rounded border border-emerald-200">
-                Verified
-              </span>
+      <div className="relative z-30 mx-auto w-full max-w-3xl space-y-4 border-t border-[#F1DADA] bg-white px-4 pb-6 pt-5 sm:px-6 min-[768px]:max-[1024px]:max-w-2xl min-[768px]:max-[1024px]:px-6 lg:max-w-4xl lg:px-8 lg:pb-8">
+        <div className="flex flex-col gap-3 border-b border-[#F1DADA] pb-4">
+          <div className="!block min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="break-words text-base font-semibold text-[#111827]">{driverName}</h2>
+              <span className="rounded-md bg-[#FEE2E2] px-2 py-1 text-[10px] font-semibold text-[#DC2626]">Verified</span>
             </div>
-            <div className="text-xs text-slate-500 font-medium">
-              {vehicleCategory}
+            <div className="mt-1 space-y-0.5 text-sm text-[#64748B]">
+              <p className="break-words">{vehicleCategory}</p>
+              <p className="break-words font-medium text-[#111827]">{vehiclePlate}</p>
             </div>
           </div>
-
-          {/* Vehicle Number Plate & Call Actions */}
-          <div className="flex flex-col items-end gap-1.5 shrink-0">
-            <div className="bg-amber-400 text-slate-950 px-3 py-1 rounded-xl font-mono font-black text-xs sm:text-sm tracking-wider border border-amber-500 shadow-2xs">
-              {vehiclePlate}
-            </div>
+          <div className="grid grid-cols-2 gap-2">
             {driverPhone && (
               <a
                 href={`tel:${driverPhone}`}
-                className="w-full justify-center bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-2xs transition"
+                className="flex min-h-11 items-center justify-center rounded-lg bg-[#DC2626] px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
               >
-                <Phone className="w-3.5 h-3.5 text-amber-400" />
-                <span>Call Driver</span>
+                Call Driver
               </a>
             )}
             <a
               href="tel:+914223596446"
-              className="w-full justify-center bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-2xs transition"
+              className={`${driverPhone ? '' : 'col-span-2'} flex min-h-11 items-center justify-center rounded-lg border border-[#DC2626] bg-white px-3 py-2 text-sm font-semibold text-[#DC2626] transition hover:bg-[#FEE2E2]`}
             >
-              <Phone className="w-3.5 h-3.5 text-slate-950" />
-              <span>Call Office</span>
+              Call Office
             </a>
           </div>
         </div>
 
-        {/* Route Stepper */}
-        <div>
-          <div className="w-full bg-slate-50 rounded-2xl p-3 border border-slate-200/80 text-xs space-y-2">
-            {/* Pickup */}
-            <div className="flex items-start gap-2">
-              <div className="w-4 h-4 rounded-full bg-emerald-500 text-white flex items-center justify-center font-bold text-[9px] mt-0.5 shrink-0">
-                A
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="text-[10px] uppercase font-bold text-slate-400">Pickup Address</div>
-                <div className="text-xs font-bold text-slate-900 truncate">
-                  {currentTrip?.pickup_location || 'Address not available'}
-                </div>
-              </div>
-            </div>
-
-            {/* Drop */}
-            <div className="flex items-start gap-2">
-              <div className="w-4 h-4 rounded-full bg-rose-500 text-white flex items-center justify-center font-bold text-[9px] mt-0.5 shrink-0">
-                B
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="text-[10px] uppercase font-bold text-slate-400">Drop Destination</div>
-                <div className="text-xs font-bold text-slate-900 truncate">
-                  {currentTrip?.drop_location || 'Address not available'}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );

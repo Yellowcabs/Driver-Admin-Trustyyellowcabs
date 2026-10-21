@@ -224,7 +224,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
   };
 
   return (
-    <div className="space-y-4 sm:space-y-6">
+    <div className="w-full min-w-0 space-y-4 overflow-x-hidden sm:space-y-6 min-[768px]:max-[1024px]:space-y-4 lg:space-y-5 [&_svg]:hidden">
       {/* Firestore Rule Advisory Notice */}
       {systemSettings?.rule_permission_notice && (
         <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3.5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
@@ -244,32 +244,31 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
       )}
 
       {/* 4 Overview KPI Cards - Active Operations Only (Hidden on mobile screens, shown on sm+) */}
-      <div className="hidden sm:grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3.5 w-full min-w-0">
+      <div className="hidden sm:grid grid-cols-2 gap-2 sm:gap-3.5 w-full min-w-0 min-[768px]:max-[1024px]:grid-cols-4 min-[768px]:max-[1024px]:gap-3 lg:grid-cols-4">
         {/* Total Active Queue */}
         <div
           onClick={() => {
             setStatusFilter('ALL');
             setCurrentPage(1);
           }}
-          className={`min-w-0 bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border transition-all cursor-pointer shadow-2xs ${
+          className={`min-w-0 bg-violet-50/70 p-3 sm:p-4 rounded-xl sm:rounded-2xl border transition-all cursor-pointer shadow-[0_8px_24px_rgba(124,58,237,0.06)] ${
             statusFilter === 'ALL'
-              ? 'border-slate-800 ring-2 ring-slate-800/10 bg-slate-50/50'
-              : 'border-slate-200/80 hover:border-slate-300'
+              ? 'border-violet-500 ring-2 ring-violet-500/15 bg-violet-100/70'
+              : 'border-violet-100 hover:border-violet-300'
           }`}
         >
           <div className="flex items-center justify-between gap-1.5">
-            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
-              Active Queue
+            <p className="break-words text-[11px] font-bold uppercase leading-tight tracking-wider text-slate-500 sm:text-xs">
+              Active
             </p>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center border border-slate-200 shrink-0">
+              <div className="hidden w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-slate-100 text-slate-700 items-center justify-center border border-slate-200 shrink-0">
               <Users className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
           <div className="mt-1.5 sm:mt-2 flex items-baseline gap-1.5 flex-wrap min-w-0">
-            <span className="text-xl sm:text-2xl lg:text-3xl font-black text-slate-900 tracking-tight tabular-nums truncate">
+            <span className="max-w-full whitespace-nowrap text-[clamp(0.875rem,4vw,1.5rem)] font-black leading-none tracking-tight text-slate-900 tabular-nums lg:text-[clamp(1rem,1.5vw,1.875rem)]">
               {activeTrips.length}
             </span>
-            <span className="text-[10px] sm:text-xs text-slate-500 font-medium truncate">live dispatches</span>
           </div>
         </div>
 
@@ -279,25 +278,24 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
             setStatusFilter('IN_PROGRESS');
             setCurrentPage(1);
           }}
-          className={`min-w-0 bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border transition-all cursor-pointer shadow-2xs ${
+          className={`min-w-0 bg-violet-50/70 p-3 sm:p-4 rounded-xl sm:rounded-2xl border transition-all cursor-pointer shadow-[0_8px_24px_rgba(124,58,237,0.06)] ${
             statusFilter === 'IN_PROGRESS'
-              ? 'border-purple-500 ring-2 ring-purple-500/20 bg-purple-50/30'
-              : 'border-slate-200/80 hover:border-purple-300'
+              ? 'border-violet-500 ring-2 ring-violet-500/15 bg-violet-100/70'
+              : 'border-violet-100 hover:border-violet-300'
           }`}
         >
           <div className="flex items-center justify-between gap-1.5">
-            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
-              In-Transit
+            <p className="break-words text-[11px] font-bold uppercase leading-tight tracking-wider text-slate-500 sm:text-xs">
+              In Transit
             </p>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-purple-50 text-purple-700 flex items-center justify-center border border-purple-200 shrink-0">
+              <div className="hidden w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-violet-100 text-violet-700 items-center justify-center border border-violet-200 shrink-0">
               <Radio className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-pulse" />
             </div>
           </div>
           <div className="mt-1.5 sm:mt-2 flex items-baseline gap-1.5 flex-wrap min-w-0">
-            <span className="text-xl sm:text-2xl lg:text-3xl font-black text-purple-700 tracking-tight tabular-nums truncate">
+            <span className="max-w-full whitespace-nowrap text-[clamp(0.875rem,4vw,1.5rem)] font-black leading-none tracking-tight text-violet-700 tabular-nums lg:text-[clamp(1rem,1.5vw,1.875rem)]">
               {inProgressTrips.length}
             </span>
-            <span className="text-[10px] sm:text-xs text-purple-700 font-medium truncate">on board</span>
           </div>
         </div>
 
@@ -307,25 +305,24 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
             setStatusFilter('OPEN');
             setCurrentPage(1);
           }}
-          className={`min-w-0 bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border transition-all cursor-pointer shadow-2xs ${
+          className={`min-w-0 bg-violet-50/70 p-3 sm:p-4 rounded-xl sm:rounded-2xl border transition-all cursor-pointer shadow-[0_8px_24px_rgba(124,58,237,0.06)] ${
             statusFilter === 'OPEN'
-              ? 'border-amber-500 ring-2 ring-amber-500/20 bg-amber-50/30'
-              : 'border-slate-200/80 hover:border-amber-300'
+              ? 'border-violet-500 ring-2 ring-violet-500/15 bg-violet-100/70'
+              : 'border-violet-100 hover:border-violet-300'
           }`}
         >
           <div className="flex items-center justify-between gap-1.5">
-            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
-              Open Queue
+            <p className="break-words text-[11px] font-bold uppercase leading-tight tracking-wider text-slate-500 sm:text-xs">
+              Open
             </p>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center border border-amber-200 shrink-0">
+              <div className="hidden w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-violet-100 text-violet-700 items-center justify-center border border-violet-200 shrink-0">
               <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
           <div className="mt-1.5 sm:mt-2 flex items-baseline gap-1.5 flex-wrap min-w-0">
-            <span className="text-xl sm:text-2xl lg:text-3xl font-black text-amber-600 tracking-tight tabular-nums truncate">
+            <span className="max-w-full whitespace-nowrap text-[clamp(0.875rem,4vw,1.5rem)] font-black leading-none tracking-tight text-violet-700 tabular-nums lg:text-[clamp(1rem,1.5vw,1.875rem)]">
               {openTrips.length}
             </span>
-            <span className="text-[10px] sm:text-xs text-amber-700 font-medium truncate">needs driver</span>
           </div>
         </div>
 
@@ -335,25 +332,24 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
             setStatusFilter('ACCEPTED');
             setCurrentPage(1);
           }}
-          className={`min-w-0 bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border transition-all cursor-pointer shadow-2xs ${
+          className={`min-w-0 bg-violet-50/70 p-3 sm:p-4 rounded-xl sm:rounded-2xl border transition-all cursor-pointer shadow-[0_8px_24px_rgba(124,58,237,0.06)] ${
             statusFilter === 'ACCEPTED'
-              ? 'border-sky-500 ring-2 ring-sky-500/20 bg-sky-50/30'
-              : 'border-slate-200/80 hover:border-sky-300'
+              ? 'border-violet-500 ring-2 ring-violet-500/15 bg-violet-100/70'
+              : 'border-violet-100 hover:border-violet-300'
           }`}
         >
           <div className="flex items-center justify-between gap-1.5">
-            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
+            <p className="break-words text-[11px] font-bold uppercase leading-tight tracking-wider text-slate-500 sm:text-xs">
               Assigned
             </p>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-sky-50 text-sky-700 flex items-center justify-center border border-sky-200 shrink-0">
+              <div className="hidden w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-violet-100 text-violet-700 items-center justify-center border border-violet-200 shrink-0">
               <Car className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
           <div className="mt-1.5 sm:mt-2 flex items-baseline gap-1.5 flex-wrap min-w-0">
-            <span className="text-xl sm:text-2xl lg:text-3xl font-black text-sky-600 tracking-tight tabular-nums truncate">
+            <span className="max-w-full whitespace-nowrap text-[clamp(0.875rem,4vw,1.5rem)] font-black leading-none tracking-tight text-violet-700 tabular-nums lg:text-[clamp(1rem,1.5vw,1.875rem)]">
               {acceptedTrips.length}
             </span>
-            <span className="text-[10px] sm:text-xs text-sky-700 font-medium truncate">en route</span>
           </div>
         </div>
       </div>
@@ -363,40 +359,40 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
         {/* ===================== MOBILE DEDICATED LAYOUT (< sm) ===================== */}
         <div className="sm:hidden space-y-3">
           {/* Top Quick Header: Live Badge + Quick Action Buttons */}
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col items-stretch gap-2">
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="relative flex h-2.5 w-2.5 shrink-0">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
               </span>
               <span className="text-xs font-black text-slate-900 uppercase tracking-wider">
-                Live Dispatch
+                Active
               </span>
               <span className="text-xs font-bold text-slate-500 tabular-nums">
                 ({activeTrips.length})
               </span>
             </div>
 
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="grid w-full grid-cols-3 gap-1.5">
               {/* Quick Create New Ride */}
               <button
                 onClick={onOpenNewTripModal}
-                className="bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-slate-950 font-black text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 shadow-2xs min-h-[38px] cursor-pointer select-none active:scale-95 transition"
+                className="w-full bg-violet-600 hover:bg-violet-700 active:bg-violet-800 text-white font-bold text-xs px-2 py-1.5 rounded-xl flex items-center justify-center gap-1 shadow-sm min-h-[38px] cursor-pointer select-none active:scale-95 transition"
                 title="Dispatch New Ride"
               >
                 <Plus className="w-3.5 h-3.5 stroke-[3]" />
-                <span>New</span>
+                <span>New Ride</span>
               </button>
 
               {/* Paste Booking from WhatsApp */}
               {onOpenPasteBookingModal && (
                 <button
                   onClick={onOpenPasteBookingModal}
-                  className="bg-amber-50 hover:bg-amber-100 active:bg-amber-200 text-amber-950 font-bold text-xs px-2.5 py-1.5 rounded-xl border border-amber-300 flex items-center gap-1 transition cursor-pointer shadow-2xs select-none min-h-[38px] active:scale-95"
+                  className="w-full bg-white hover:bg-violet-50 active:bg-violet-100 text-slate-700 font-bold text-xs px-2 py-1.5 rounded-xl border border-slate-200 flex items-center justify-center gap-1 transition cursor-pointer shadow-sm select-none min-h-[38px] active:scale-95"
                   title="Paste copied booking from WhatsApp or SMS"
                 >
                   <ClipboardPaste className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                  <span>Paste</span>
+                  <span>Paste Booking</span>
                 </button>
               )}
 
@@ -404,12 +400,12 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
               {onNavigateToTrips && (
                 <button
                   onClick={onNavigateToTrips}
-                  className="bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-700 font-bold text-xs px-2 py-1.5 rounded-xl border border-slate-200/90 flex items-center gap-1 transition cursor-pointer select-none min-h-[38px] active:scale-95"
+                  className="w-full bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-700 font-bold text-xs px-2 py-1.5 rounded-xl border border-slate-200/90 flex items-center justify-center gap-1 transition cursor-pointer select-none min-h-[38px] active:scale-95"
                   title="Trip History & Billing"
                 >
                   <History className="w-3.5 h-3.5 text-slate-500" />
                   <span className="text-[10px] tabular-nums font-extrabold text-slate-600">
-                    {completedTripsCount + closedTripsCount}
+                    History {completedTripsCount + closedTripsCount}
                   </span>
                 </button>
               )}
@@ -421,7 +417,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
             {[
               {
                 id: 'ALL',
-                label: 'All',
+                label: 'Active',
                 count: activeTrips.length,
                 countClass: statusFilter === 'ALL' ? 'text-white' : 'text-slate-900',
               },
@@ -429,17 +425,17 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                 id: 'OPEN',
                 label: 'Open',
                 count: openTrips.length,
-                countClass: statusFilter === 'OPEN' ? 'text-amber-300' : 'text-amber-700',
+                countClass: statusFilter === 'OPEN' ? 'text-violet-200' : 'text-violet-700',
               },
               {
                 id: 'ACCEPTED',
                 label: 'Assigned',
                 count: acceptedTrips.length,
-                countClass: statusFilter === 'ACCEPTED' ? 'text-sky-300' : 'text-sky-700',
+                countClass: statusFilter === 'ACCEPTED' ? 'text-violet-200' : 'text-violet-700',
               },
               {
                 id: 'IN_PROGRESS',
-                label: 'On Trip',
+                label: 'In Transit',
                 count: inProgressTrips.length,
                 countClass: statusFilter === 'IN_PROGRESS' ? 'text-purple-300' : 'text-purple-700',
               },
@@ -454,7 +450,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                   }}
                   className={`flex flex-col items-center justify-center py-2 px-1 rounded-xl transition-all cursor-pointer min-h-[52px] select-none active:scale-95 ${
                     isActive
-                      ? 'bg-slate-900 text-white shadow-sm ring-1 ring-slate-800'
+                      ? 'bg-purple-700 text-white shadow-sm ring-1 ring-purple-700'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
                   }`}
                 >
@@ -482,9 +478,9 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                   setVehicleFilter(e.target.value);
                   setCurrentPage(1);
                 }}
-                className={`w-full text-xs font-semibold appearance-none border rounded-xl pl-8 pr-7 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer min-h-[44px] transition-all truncate ${
+                className={`w-full text-xs font-semibold appearance-none border rounded-xl pl-3 pr-7 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500 cursor-pointer min-h-[44px] transition-all truncate ${
                   vehicleFilter !== 'ALL'
-                    ? 'bg-amber-50/80 border-amber-400 text-amber-950 font-bold ring-1 ring-amber-400/30'
+                    ? 'bg-violet-50 border-violet-300 text-violet-900 font-bold ring-1 ring-violet-300/30'
                     : 'bg-slate-50 border-slate-200/90'
                 }`}
                 title="Filter by Vehicle Category"
@@ -524,9 +520,9 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                   setTripTypeFilter(e.target.value);
                   setCurrentPage(1);
                 }}
-                className={`w-full text-xs font-semibold appearance-none border rounded-xl pl-8 pr-7 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer min-h-[44px] transition-all truncate ${
+                className={`w-full text-xs font-semibold appearance-none border rounded-xl pl-3 pr-7 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500 cursor-pointer min-h-[44px] transition-all truncate ${
                   tripTypeFilter !== 'ALL'
-                    ? 'bg-amber-50/80 border-amber-400 text-amber-950 font-bold ring-1 ring-amber-400/30'
+                    ? 'bg-violet-50 border-violet-300 text-violet-900 font-bold ring-1 ring-violet-300/30'
                     : 'bg-slate-50 border-slate-200/90'
                 }`}
                 title="Filter by Trip Type"
@@ -547,7 +543,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
             <div className="flex items-center gap-1.5 text-slate-500 font-medium">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
               <span>
-                Showing <strong className="text-slate-800 font-bold">{filteredTrips.length}</strong> active ride{filteredTrips.length === 1 ? '' : 's'}
+                Showing <strong className="text-slate-800 font-bold">{filteredTrips.length}</strong>
               </span>
             </div>
 
@@ -575,25 +571,25 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
             {[
               {
                 id: 'ALL',
-                label: 'All Rides',
+                 label: 'Active',
                 count: activeTrips.length,
                 badgeClass: statusFilter === 'ALL' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700',
               },
               {
                 id: 'OPEN',
-                label: 'Open Queue',
+                 label: 'Open',
                 count: openTrips.length,
-                badgeClass: statusFilter === 'OPEN' ? 'bg-amber-400 text-slate-950 font-black' : 'bg-amber-100 text-amber-900 font-bold',
+                badgeClass: statusFilter === 'OPEN' ? 'bg-violet-200 text-violet-900 font-black' : 'bg-violet-100 text-violet-800 font-bold',
               },
               {
                 id: 'ACCEPTED',
                 label: 'Assigned',
                 count: acceptedTrips.length,
-                badgeClass: statusFilter === 'ACCEPTED' ? 'bg-sky-400 text-slate-950 font-black' : 'bg-sky-100 text-sky-900 font-bold',
+                badgeClass: statusFilter === 'ACCEPTED' ? 'bg-violet-200 text-violet-900 font-black' : 'bg-violet-100 text-violet-800 font-bold',
               },
               {
                 id: 'IN_PROGRESS',
-                label: 'On Trip',
+                 label: 'In Transit',
                 count: inProgressTrips.length,
                 badgeClass: statusFilter === 'IN_PROGRESS' ? 'bg-purple-300 text-purple-950 font-black' : 'bg-purple-100 text-purple-900 font-bold',
               },
@@ -608,7 +604,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                   }}
                   className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none active:scale-[0.98] ${
                     isActive
-                      ? 'bg-slate-900 text-white shadow-xs'
+                      ? 'bg-purple-700 text-white shadow-sm'
                       : 'bg-slate-100/90 text-slate-600 hover:text-slate-900 hover:bg-slate-200/80 border border-slate-200/60'
                   }`}
                 >
@@ -634,11 +630,20 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
               </button>
             )}
 
+            <button
+              onClick={onOpenNewTripModal}
+              className="bg-violet-600 hover:bg-violet-700 active:bg-violet-800 text-white font-bold text-xs px-3.5 py-2 rounded-xl border border-violet-600 flex items-center gap-1.5 transition cursor-pointer shadow-sm select-none active:scale-[0.98] ml-auto"
+              title="Dispatch New Ride"
+            >
+              <Plus className="w-4 h-4" />
+              <span>New Ride</span>
+            </button>
+
             {/* Paste Booking from WhatsApp */}
             {onOpenPasteBookingModal && (
               <button
                 onClick={onOpenPasteBookingModal}
-                className="bg-amber-50 hover:bg-amber-100 active:bg-amber-200 text-amber-950 font-bold text-xs px-3.5 py-2 rounded-xl border border-amber-300 flex items-center gap-1.5 transition cursor-pointer shadow-2xs select-none active:scale-[0.98] ml-auto"
+                 className="bg-white hover:bg-violet-50 active:bg-violet-100 text-slate-700 font-bold text-xs px-3.5 py-2 rounded-xl border border-slate-200 flex items-center gap-1.5 transition cursor-pointer shadow-sm select-none active:scale-[0.98]"
                 title="Paste copied booking text from WhatsApp or email"
               >
                 <ClipboardPaste className="w-4 h-4 text-amber-600 shrink-0" />
@@ -661,9 +666,9 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                     setVehicleFilter(e.target.value);
                     setCurrentPage(1);
                   }}
-                  className={`w-full text-xs font-semibold appearance-none border rounded-xl pl-8 pr-7 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer min-h-[38px] transition-all truncate ${
+                  className={`w-full text-xs font-semibold appearance-none border rounded-xl pl-3 pr-7 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500 cursor-pointer min-h-[38px] transition-all truncate ${
                     vehicleFilter !== 'ALL'
-                      ? 'bg-amber-50/70 border-amber-300 text-amber-950 font-bold'
+                      ? 'bg-violet-50 border-violet-300 text-violet-900 font-bold'
                       : 'bg-slate-50 hover:bg-slate-100/70 border-slate-200/90'
                   }`}
                   title="Filter by Vehicle Category"
@@ -703,9 +708,9 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                     setTripTypeFilter(e.target.value);
                     setCurrentPage(1);
                   }}
-                  className={`w-full text-xs font-semibold appearance-none border rounded-xl pl-8 pr-7 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer min-h-[38px] transition-all truncate ${
+                  className={`w-full text-xs font-semibold appearance-none border rounded-xl pl-3 pr-7 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-500 cursor-pointer min-h-[38px] transition-all truncate ${
                     tripTypeFilter !== 'ALL'
-                      ? 'bg-amber-50/70 border-amber-300 text-amber-950 font-bold'
+                      ? 'bg-violet-50 border-violet-300 text-violet-900 font-bold'
                       : 'bg-slate-50 hover:bg-slate-100/70 border-slate-200/90'
                   }`}
                   title="Filter by Trip Type"
@@ -729,7 +734,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                     setTripTypeFilter('ALL');
                     setCurrentPage(1);
                   }}
-                  className="text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 px-3 py-1.5 rounded-xl transition cursor-pointer min-h-[36px] flex items-center gap-1.5 active:scale-[0.98]"
+                className="text-xs font-bold text-violet-800 bg-violet-50 hover:bg-violet-100 border border-violet-200 px-3 py-1.5 rounded-xl transition cursor-pointer min-h-[36px] flex items-center gap-1.5 active:scale-[0.98]"
                   title="Reset All Active Filters"
                 >
                   <RotateCcw className="w-3 h-3 text-amber-700" />
@@ -742,7 +747,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
             <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium shrink-0">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
               <span>
-                Showing <strong className="text-slate-800 font-bold">{filteredTrips.length}</strong> active ride{filteredTrips.length === 1 ? '' : 's'}
+                Showing <strong className="text-slate-800 font-bold">{filteredTrips.length}</strong>
               </span>
             </div>
           </div>
@@ -750,48 +755,13 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
       </div>
 
       {/* Main Content Area */}
-      {filteredTrips.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-12 text-center shadow-2xs">
-          <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-3 border border-amber-200">
-            <Car className="w-7 h-7" />
-          </div>
-          <h4 className="font-extrabold text-slate-900 text-sm">No active dispatch trips</h4>
-          <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1 mb-4">
-            {statusFilter !== 'ALL' || vehicleFilter !== 'ALL' || tripTypeFilter !== 'ALL' || globalSearchQuery
-              ? 'Try clearing the active search or category filters to see more results.'
-              : 'All active rides are clear. Completed and closed (cancelled) trips are archived in Trip History.'}
-          </p>
-          <div className="flex items-center justify-center gap-2 flex-wrap">
-            {onOpenPasteBookingModal && (
-              <button
-                onClick={onOpenPasteBookingModal}
-                className="bg-white hover:bg-slate-50 text-slate-800 font-bold px-3.5 py-2 rounded-xl text-xs border border-slate-200 cursor-pointer inline-flex items-center gap-1.5 shadow-2xs"
-              >
-                <ClipboardPaste className="w-3.5 h-3.5 text-amber-600" />
-                <span>Paste Booking</span>
-              </button>
-            )}
-            <button
-              onClick={onOpenNewTripModal}
-              className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-4 py-2 rounded-xl text-xs shadow-2xs cursor-pointer inline-flex items-center gap-1.5"
-            >
-              <Plus className="w-3.5 h-3.5 stroke-[3]" />
-              <span>Dispatch New Ride</span>
-            </button>
-            {onNavigateToTrips && (
-              <button
-                onClick={onNavigateToTrips}
-                className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs border border-slate-200 cursor-pointer inline-flex items-center gap-1.5"
-              >
-                <History className="w-3.5 h-3.5 text-slate-500" />
-                <span>View Trip History</span>
-              </button>
-            )}
-          </div>
+       {filteredTrips.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-slate-200/80 px-4 py-10 sm:py-14 text-center shadow-2xs">
+          <h4 className="font-extrabold text-slate-900 text-base">No active trips</h4>
         </div>
       ) : viewMode === 'grid' ? (
         /* SEPARATE, DISTINCT TRIP CARDS (Mobile-First, completely separated layout) */
-        <div className="space-y-6 sm:space-y-0 sm:grid sm:grid-cols-1 xl:grid-cols-2 sm:gap-6">
+        <div className="space-y-6 sm:space-y-0 sm:grid sm:grid-cols-1 min-[900px]:max-[1024px]:grid-cols-2 min-[768px]:max-[1024px]:gap-4 lg:grid-cols-2 sm:gap-6">
           {paginatedTrips.map((trip, idx) => {
             const matchedDriver = drivers.find((d) => d.driver_id === trip.driver_id);
             const driverPhone = trip.driver_phone || matchedDriver?.mobile_number;
@@ -803,27 +773,18 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                 key={trip.doc_id || trip.trip_id}
                 className="relative"
               >
-                {/* Mobile Trip Separator Banner (Ensures no visual confusion between continuous trips) */}
-                <div className="flex items-center gap-2 mb-2 sm:hidden px-1">
-                  <div className="h-px bg-slate-300 flex-1" />
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-300 shadow-2xs">
-                    Ride #{tripSequenceNumber} of {filteredTrips.length}
-                  </span>
-                  <div className="h-px bg-slate-300 flex-1" />
-                </div>
-
                 <div
-                  className={`bg-white rounded-2xl sm:rounded-3xl border-2 transition-all shadow-xs hover:shadow-md flex flex-col justify-between overflow-hidden ${
+                    className={`bg-white rounded-xl border border-slate-200 transition-all shadow-sm hover:shadow-md flex flex-col justify-between overflow-hidden ${
                     trip.status === 'IN_PROGRESS'
-                      ? 'border-purple-400 ring-2 ring-purple-500/10'
+                      ? 'border-slate-300 ring-1 ring-slate-200'
                       : trip.status === 'ACCEPTED'
-                      ? 'border-sky-400 ring-2 ring-sky-500/10'
+                      ? 'border-slate-300 ring-1 ring-slate-200'
                       : trip.status === 'OPEN'
-                      ? 'border-amber-400 ring-2 ring-amber-500/10'
+                      ? 'border-orange-300 ring-1 ring-orange-100'
                       : 'border-slate-300'
                   }`}
                 >
-                  <div className="p-4 sm:p-6 space-y-4">
+                  <div className="min-w-0 p-3 sm:p-4 space-y-3">
                     {/* 1. TOP HEADER: Trip ID, Sequence, Passenger Name, Category & Status Badge */}
                     <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
                       <div>
@@ -834,15 +795,11 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                           </span>
                           <button
                             onClick={() => copyTripId(formatTripId(trip.trip_id))}
-                            className="inline-flex items-center gap-1 text-xs font-mono font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded-lg border border-amber-300 transition cursor-pointer"
+                            className="inline-flex items-center gap-1 text-xs font-mono font-bold text-slate-700 bg-white hover:bg-slate-50 px-2 py-1 rounded-lg border border-slate-200 transition cursor-pointer"
                             title="Click to copy Trip ID"
                           >
                             <span>#{formatTripId(trip.trip_id)}</span>
-                            {copiedId === formatTripId(trip.trip_id) || copiedId === trip.trip_id ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-600" />
-                            ) : (
-                              <Copy className="w-3.5 h-3.5 opacity-60 text-amber-800" />
-                            )}
+                            {copiedId === formatTripId(trip.trip_id) || copiedId === trip.trip_id ? 'Copied' : 'Copy'}
                           </button>
                         </div>
 
@@ -855,8 +812,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                             {trip.vehicle_category || 'Mini'}
                           </span>
                           {trip.is_package || trip.trip_type === 'PACKAGE' ? (
-                            <span className="text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 flex items-center gap-1">
-                              <Timer className="w-3 h-3 text-amber-600" />
+                            <span className="text-[10px] font-bold text-slate-700 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
                               <span>
                                 {trip.package_hours && trip.package_kms
                                   ? `Package (${trip.package_hours}h / ${trip.package_kms}km)`
@@ -868,8 +824,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                               </span>
                             </span>
                           ) : (
-                            <span className="text-[10px] font-bold text-sky-800 bg-sky-50 px-2 py-0.5 rounded border border-sky-200 flex items-center gap-1">
-                              <Zap className="w-3 h-3 text-sky-600" />
+                            <span className="text-[10px] font-bold text-slate-700 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
                               <span>Regular</span>
                             </span>
                           )}
@@ -881,61 +836,44 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                         <span
                           className={`inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full border shadow-2xs ${
                             trip.status === 'IN_PROGRESS'
-                              ? 'bg-purple-100 text-purple-800 border-purple-300'
+                              ? 'bg-slate-100 text-slate-700 border-slate-200'
                               : trip.status === 'ACCEPTED'
-                              ? 'bg-sky-100 text-sky-800 border-sky-300'
+                              ? 'bg-slate-100 text-slate-700 border-slate-200'
                               : trip.status === 'OPEN'
-                              ? 'bg-amber-100 text-amber-900 border-amber-300 animate-pulse'
+                              ? 'bg-orange-50 text-orange-800 border-orange-200'
                               : trip.status === 'COMPLETED'
-                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                              : 'bg-rose-100 text-rose-800 border-rose-300'
+                              ? 'bg-slate-100 text-slate-700 border-slate-200'
+                              : 'bg-slate-100 text-slate-600 border-slate-200'
                           }`}
                         >
-                          <span
-                            className={`w-2 h-2 rounded-full ${
-                              trip.status === 'IN_PROGRESS'
-                                ? 'bg-purple-600 animate-ping'
-                                : trip.status === 'ACCEPTED'
-                                ? 'bg-sky-600'
-                                : trip.status === 'OPEN'
-                                ? 'bg-amber-600'
-                                : trip.status === 'COMPLETED'
-                                ? 'bg-emerald-600'
-                                : 'bg-rose-600'
-                            }`}
-                          />
                           <span>{trip.status === 'OPEN' ? 'OPEN QUEUE' : trip.status.replace('_', ' ')}</span>
                         </span>
 
                         <div className="text-[10px] text-slate-500 font-medium flex items-center justify-end gap-1">
-                          <Clock className="w-3 h-3 text-slate-400" />
                           <span>{formatTimestamp(trip.created_at)}</span>
                         </div>
                       </div>
                     </div>
 
                     {/* 2. CUSTOMER CONTACT & SPECIAL NOTES (Mobile-Friendly 44px Tap) */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-slate-50/90 p-3 rounded-2xl border border-slate-200/90 text-xs">
-                      <div className="flex items-center gap-2 text-slate-700 font-semibold flex-wrap">
-                        <Phone className="w-4 h-4 text-slate-400 shrink-0" />
-                        <span>Passenger:</span>
-                        {trip.customer_phone ? (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-y border-slate-100 py-2 text-xs">
+                      <div className="flex flex-col gap-1 text-slate-700 font-semibold min-w-0">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Passenger</span>
+                        {trip.customer_phone?.trim() ? (
                           <a
                             href={`tel:${trip.customer_phone}`}
-                            className="font-mono font-bold text-emerald-800 hover:text-emerald-900 flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-xl border border-emerald-300 transition cursor-pointer min-h-[38px]"
+                            className="w-full sm:w-auto inline-flex items-center justify-center bg-[#009966] hover:bg-[#007a52] text-white font-bold px-4 py-2.5 rounded-lg transition cursor-pointer min-h-[44px]"
                           >
-                            <PhoneCall className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>{trip.customer_phone}</span>
+                            <span className="min-w-0 break-all text-center">Call Passenger · {trip.customer_phone}</span>
                           </a>
                         ) : (
-                          <span className="font-mono font-bold text-slate-500">Not provided</span>
+                          <span className="font-mono font-bold text-slate-500">Phone not provided</span>
                         )}
                       </div>
 
                       {trip.notes && (
-                        <div className="flex items-center gap-1.5 text-slate-600 text-[11px] bg-white px-2.5 py-1.5 rounded-xl border border-slate-200">
-                          <Info className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <span className="truncate max-w-[240px]" title={trip.notes}>
+                        <div className="text-slate-600 text-[11px]">
+                          <span className="max-w-full break-words" title={trip.notes}>
                             {trip.notes}
                           </span>
                         </div>
@@ -943,15 +881,12 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                     </div>
 
                     {/* 3. TRIP ROUTE STEPPER (Green Pickup to Red Dropoff with Distance) */}
-                    <div className="bg-slate-50/70 rounded-2xl p-3.5 sm:p-4 border border-slate-200/80 space-y-3">
+                    <div className="space-y-3 border-b border-slate-100 pb-3">
                       {/* Pickup Address */}
                       <div className="flex items-start gap-3">
-                        <div className="w-7 h-7 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0 border border-emerald-300 font-black text-xs mt-0.5 shadow-2xs">
-                          A
-                        </div>
                         <div className="flex-1 min-w-0">
-                          <div className="text-[10px] font-black uppercase tracking-wider text-emerald-700 flex items-center gap-1">
-                            <span>Pickup Location</span>
+                          <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                            <span>Pickup</span>
                           </div>
                           <div className="font-bold text-slate-900 text-xs sm:text-sm mt-0.5 leading-snug">
                             {trip.pickup_location || 'Address not specified'}
@@ -960,10 +895,9 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                       </div>
 
                       {/* Connecting Line with Distance & Duration */}
-                      <div className="flex items-center gap-3 pl-3.5">
-                        <div className="w-0.5 h-6 bg-slate-300 ml-[1px]" />
-                        <div className="flex items-center gap-2 text-[11px] font-bold text-slate-700 bg-white px-3 py-1 rounded-xl border border-slate-200 shadow-2xs">
-                          <Navigation className="w-3 h-3 text-sky-600" />
+                      <div className="flex items-center gap-3 pl-0">
+                        <div className="w-0.5 h-5 bg-slate-200 ml-0" />
+                        <div className="flex items-center gap-2 text-[11px] font-bold text-slate-500">
                           <span>{trip.distance_km ? `${trip.distance_km} km` : '~10 km route'}</span>
                           {trip.duration_seconds && (
                             <span className="text-slate-400 font-normal">
@@ -975,12 +909,9 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
 
                       {/* Drop-off Address */}
                       <div className="flex items-start gap-3">
-                        <div className="w-7 h-7 rounded-full bg-rose-100 text-rose-800 flex items-center justify-center shrink-0 border border-rose-300 font-black text-xs mt-0.5 shadow-2xs">
-                          B
-                        </div>
                         <div className="flex-1 min-w-0">
-                          <div className="text-[10px] font-black uppercase tracking-wider text-rose-700 flex items-center gap-1">
-                            <span>Drop-Off Destination</span>
+                          <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                            <span>Drop</span>
                           </div>
                           <div className="font-bold text-slate-900 text-xs sm:text-sm mt-0.5 leading-snug">
                             {trip.drop_location || 'Drop destination not specified'}
@@ -991,20 +922,20 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
 
                     {/* 4. ASSIGNED DRIVER PROFILE OR OPEN BROADCAST ALERT */}
                     {isAssigned ? (
-                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="border-y border-slate-100 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div>
                           <div className="flex items-center gap-2">
                             <span className="font-black text-slate-900 text-sm sm:text-base">
                               {trip.driver_name || 'Assigned Driver'}
                             </span>
                             {trip.driver_id && (
-                              <span className="text-[10px] font-mono font-bold bg-slate-200/80 text-slate-800 px-2 py-0.5 rounded-md">
+                              <span className="text-[10px] font-mono font-bold text-slate-600">
                                 {trip.driver_id}
                               </span>
                             )}
                           </div>
                           <div className="flex items-center gap-2 mt-1.5 text-xs flex-wrap">
-                            <span className="font-mono font-black text-slate-900 bg-white px-2.5 py-0.5 rounded-lg border border-slate-200 shadow-2xs">
+                            <span className="font-mono font-black text-slate-900">
                               {trip.vehicle_number || matchedDriver?.vehicle_number || 'TN 66 AV 6589'}
                             </span>
                             <span className="text-slate-600 font-bold">
@@ -1017,45 +948,36 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                         {driverPhone && (
                           <a
                             href={`tel:${driverPhone}`}
-                            className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold px-3.5 py-2 rounded-xl text-xs border border-emerald-300 flex items-center justify-center gap-1.5 transition self-start sm:self-center min-h-[40px]"
+                            className="bg-[#009966] hover:bg-[#007a52] text-white font-bold px-3.5 py-2 rounded-lg text-xs flex items-center justify-center transition self-start sm:self-center min-h-[44px]"
                           >
-                            <PhoneCall className="w-3.5 h-3.5 text-emerald-600" />
                             <span>Call Driver ({driverPhone})</span>
                           </a>
                         )}
                       </div>
                     ) : (
-                      <div className="bg-amber-50/90 border border-amber-300 rounded-2xl p-3.5 flex items-center justify-between gap-3">
+                      <div className="border-y border-slate-100 py-2.5 flex items-center justify-between gap-3">
                         <div>
-                          <div className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
-                            <Radio className="w-4 h-4 text-amber-600 animate-pulse" />
+                          <div className="text-xs font-bold text-slate-800">
                             <span>Waiting for Driver Assignment</span>
                           </div>
                           <div className="text-[11px] text-amber-800 font-medium mt-0.5">
                            
                           </div>
                         </div>
-                        <button
-                          onClick={() => onOpenAssignModal(trip)}
-                          className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs px-3.5 py-2 rounded-xl shrink-0 cursor-pointer shadow-2xs min-h-[40px]"
-                        >
-                          Assign Driver
-                        </button>
                       </div>
                     )}
 
                     {/* 5. FARE & SECURITY START OTP BOX */}
-                    <div className="grid grid-cols-2 gap-3 pt-1">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-y border-slate-100 py-3">
                       {/* Fare Summary */}
-                      <div className="bg-slate-50 rounded-2xl p-3 sm:p-3.5 border border-slate-200 flex flex-col justify-between">
+                      <div className="flex flex-col justify-between">
                         <div className="flex items-center justify-between">
                           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
                             {trip.status === 'COMPLETED' ? 'Settled Fare' : 'Estimated Fare'}
                           </span>
-                          <IndianRupee className="w-4 h-4 text-amber-600" />
                         </div>
                         <div className="mt-1.5">
-                          <span className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight tabular-nums">
+                          <span className="text-xl sm:text-2xl font-black text-orange-700 tracking-tight tabular-nums">
                             ₹{trip.final_fare || trip.estimated_fare || 0}
                           </span>
                           <div className="text-[10px] text-slate-500 font-medium">
@@ -1065,16 +987,15 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                       </div>
 
                       {/* Security OTP Start Box */}
-                      <div className="bg-amber-50/70 rounded-2xl p-3 sm:p-3.5 border border-amber-200/90 flex flex-col justify-between">
+                      <div className="flex flex-col justify-between sm:border-l sm:border-slate-100 sm:pl-3">
                         <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-amber-800">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
                             Security Start OTP
                           </span>
-                          <KeyRound className="w-4 h-4 text-amber-700" />
                         </div>
                         <div className="mt-1.5">
                           <div className="flex items-center justify-between gap-1 flex-wrap">
-                            <div className="text-xl sm:text-2xl font-mono font-black text-amber-900 tracking-widest tabular-nums">
+                            <div className="text-xl sm:text-2xl font-mono font-black text-slate-900 tracking-widest tabular-nums">
                               {trip.otp || '----'}
                             </div>
                             {trip.otp && (
@@ -1083,11 +1004,9 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                                 customerPhone={trip.customer_phone}
                                 customerName={trip.customer_name}
                                 compact
+                                className="[&_a]:min-h-[44px] [&_a]:px-3 [&_a]:py-2 [&_a]:rounded-lg [&_button]:min-h-[44px] [&_button]:px-3 [&_button]:py-2 [&>button]:hidden [&_svg]:hidden"
                               />
                             )}
-                          </div>
-                          <div className="text-[10px] text-amber-700 font-medium">
-                            Driver OTP 
                           </div>
                         </div>
                       </div>
@@ -1096,47 +1015,31 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                     {/* 6. OPTIONAL CUSTOMER LIVE TRACKING */}
                     <div className="pt-2 border-t border-slate-100">
                       {trip.tracking_enabled && trip.tracking_token ? (
-                        <div className="bg-emerald-50/90 border border-emerald-200/90 rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <span className="relative flex h-2.5 w-2.5 shrink-0">
-                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-                            </span>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="text-xs font-bold text-emerald-950">
-                                  Live Customer Tracking Active
-                                </span>
-                                
-                                 
-                               
-                              </div>
-                              <p className="text-[10px] text-emerald-700 truncate">
-                               
-                              </p>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 py-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs font-bold text-emerald-700">
+                                Live Customer Tracking Active
+                              </span>
                             </div>
                           </div>
 
                           <button
                             onClick={() => onOpenTrackingModal(trip)}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3.5 py-2 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs transition min-h-[38px]"
+                            className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3.5 py-2 rounded-lg flex items-center justify-center cursor-pointer transition min-h-[44px]"
                           >
-                            <Share2 className="w-3.5 h-3.5" />
                             <span>Share Link</span>
                           </button>
                         </div>
                       ) : (
-                        <div className="bg-slate-50 hover:bg-slate-100/80 border border-slate-200/90 rounded-2xl p-2.5 sm:p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 py-2">
                           <div className="flex items-center gap-2 min-w-0">
-                            <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center shrink-0 border border-amber-200">
-                              <Navigation className="w-3.5 h-3.5 text-amber-700" />
-                            </div>
                             <div className="min-w-0">
                               <div className="flex items-center gap-1.5">
                                 <span className="text-xs font-bold text-slate-800">
                                   Customer Live Tracking
                                 </span>
-                                <span className="text-[10px] text-amber-700 bg-amber-50 font-semibold px-1.5 py-0.2 rounded border border-amber-200">
+                                <span className="text-[10px] text-slate-500 font-semibold">
                                   Optional
                                 </span>
                               </div>
@@ -1148,9 +1051,8 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
 
                           <button
                             onClick={() => onOpenTrackingModal(trip)}
-                            className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs px-3.5 py-2 rounded-xl flex items-center justify-center gap-1.5 shrink-0 cursor-pointer shadow-2xs transition self-stretch sm:self-auto min-h-[38px]"
+                            className="border border-orange-300 text-orange-700 hover:bg-orange-50 font-bold text-xs px-3.5 py-2 rounded-lg flex items-center justify-center shrink-0 cursor-pointer transition self-stretch sm:self-auto min-h-[38px]"
                           >
-                            <Zap className="w-3.5 h-3.5" />
                             <span>Generate Tracking Link</span>
                           </button>
                         </div>
@@ -1159,39 +1061,36 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                   </div>
 
                   {/* 7. OPERATIONAL ACTION TOOLBAR (Touch-Friendly 44px Target Buttons on Every Card) */}
-                  <div className="bg-slate-50/90 border-t border-slate-200/90 p-3 sm:p-4 flex items-center justify-between gap-2 flex-wrap">
+                  <div className="border-t border-slate-200 p-3 sm:p-4 flex items-center justify-between gap-2 flex-wrap">
                     {trip.status === 'OPEN' && (
                       <>
                         <button
                           onClick={() => onOpenAssignModal(trip)}
-                          className="bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-slate-950 font-black text-xs px-4 py-2.5 rounded-xl shadow-xs transition flex items-center justify-center gap-2 cursor-pointer min-h-[44px] flex-1 sm:flex-none"
+                          className="bg-[#FF9800] hover:bg-[#e68900] active:bg-[#cc7a00] text-white font-bold text-xs px-4 py-2.5 rounded-lg transition flex items-center justify-center cursor-pointer min-h-[44px] flex-1 sm:flex-none"
                         >
-                          <User className="w-4 h-4 stroke-[2.5]" />
                           <span>Assign Driver</span>
                         </button>
                         <div className="flex items-center gap-1.5 shrink-0 ml-auto">
                           <button
                             onClick={() => onOpenEditModal(trip)}
-                            className="bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs px-3 py-2.5 rounded-xl border border-slate-200 transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px]"
+                            className="bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs px-3 py-2.5 rounded-lg border border-slate-200 transition flex items-center justify-center cursor-pointer min-h-[44px]"
                             title="Edit Trip Details"
                           >
-                            <Edit3 className="w-3.5 h-3.5 text-slate-500" />
                             <span>Edit</span>
                           </button>
                           <button
                             onClick={() => setTripToCancel(trip)}
-                            className="bg-white hover:bg-rose-50 text-rose-700 font-bold text-xs px-3 py-2.5 rounded-xl border border-rose-200 transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px]"
+                            className="bg-white hover:bg-rose-50 text-rose-700 font-bold text-xs px-3 py-2.5 rounded-lg border border-rose-200 transition flex items-center justify-center cursor-pointer min-h-[44px]"
                             title="Cancel Trip"
                           >
-                            <Ban className="w-3.5 h-3.5 text-rose-600" />
                             <span>Cancel</span>
                           </button>
                           <button
                             onClick={() => handleDeleteClick(trip)}
-                            className="p-2.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center border border-slate-200"
+                            className="px-3 py-2.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer min-h-[44px] flex items-center justify-center border border-slate-200 text-xs font-bold"
                             title="Delete Record"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <span>Delete</span>
                           </button>
                         </div>
                       </>
@@ -1201,10 +1100,9 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                       <div className="flex items-center gap-1.5 shrink-0 ml-auto flex-wrap">
                         <button
                           onClick={() => handleUnassignClick(trip)}
-                          className="bg-white hover:bg-amber-50 text-amber-900 font-bold text-xs px-3 py-2.5 rounded-xl border border-amber-300 transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px]"
+                          className="bg-white hover:bg-amber-50 text-amber-900 font-bold text-xs px-3 py-2.5 rounded-lg border border-amber-300 transition flex items-center justify-center cursor-pointer min-h-[44px]"
                           title="Unassign Driver and Return to Queue"
                         >
-                          <UserMinus className="w-3.5 h-3.5 text-amber-700" />
                           <span>Unassign</span>
                         </button>
                         <button
@@ -1212,15 +1110,13 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                           className="bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs px-3 py-2.5 rounded-xl border border-slate-200 transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px]"
                           title="Edit Trip Details"
                         >
-                          <Edit3 className="w-3.5 h-3.5 text-slate-500" />
                           <span>Edit</span>
                         </button>
                         <button
                           onClick={() => setTripToCancel(trip)}
-                          className="bg-white hover:bg-rose-50 text-rose-700 font-bold text-xs px-3 py-2.5 rounded-xl border border-rose-200 transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px]"
+                          className="bg-white hover:bg-rose-50 text-rose-700 font-bold text-xs px-3 py-2.5 rounded-lg border border-rose-200 transition flex items-center justify-center cursor-pointer min-h-[44px]"
                           title="Cancel Trip"
                         >
-                          <Ban className="w-3.5 h-3.5 text-rose-600" />
                           <span>Cancel</span>
                         </button>
                       </div>
@@ -1230,18 +1126,16 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                       <div className="flex items-center gap-1.5 shrink-0 ml-auto flex-wrap">
                         <button
                           onClick={() => onOpenEditModal(trip)}
-                          className="bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs px-3 py-2.5 rounded-xl border border-slate-200 transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px]"
+                          className="bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs px-3 py-2.5 rounded-lg border border-slate-200 transition flex items-center justify-center cursor-pointer min-h-[44px]"
                           title="Edit Trip Details"
                         >
-                          <Edit3 className="w-3.5 h-3.5 text-slate-500" />
                           <span>Edit</span>
                         </button>
                         <button
                           onClick={() => setTripToCancel(trip)}
-                          className="bg-white hover:bg-rose-50 text-rose-700 font-bold text-xs px-3 py-2.5 rounded-xl border border-rose-200 transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px]"
+                          className="bg-white hover:bg-rose-50 text-rose-700 font-bold text-xs px-3 py-2.5 rounded-lg border border-rose-200 transition flex items-center justify-center cursor-pointer min-h-[44px]"
                           title="Cancel Trip"
                         >
-                          <Ban className="w-3.5 h-3.5 text-rose-600" />
                           <span>Cancel</span>
                         </button>
                       </div>
@@ -1318,13 +1212,13 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                       </td>
 
                       <td className="py-3.5 px-4 align-top max-w-xs">
-                        <div className="flex items-center gap-1.5 text-slate-900 font-bold truncate">
+                        <div className="flex min-w-0 items-start gap-1.5 break-words font-bold text-slate-900">
                           <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                          <span className="truncate">{trip.pickup_location}</span>
+                          <span className="min-w-0 break-words">{trip.pickup_location}</span>
                         </div>
-                        <div className="flex items-center gap-1.5 text-slate-500 text-[11px] truncate mt-1">
+                        <div className="mt-1 flex min-w-0 items-start gap-1.5 break-words text-[11px] text-slate-500">
                           <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0" />
-                          <span className="truncate">{trip.drop_location}</span>
+                          <span className="min-w-0 break-words">{trip.drop_location}</span>
                         </div>
                       </td>
 
@@ -1426,26 +1320,29 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                           {(trip.status === 'OPEN' || trip.status === 'ACCEPTED' || trip.status === 'IN_PROGRESS') && (
                             <button
                               onClick={() => setTripToCancel(trip)}
-                              className="p-1.5 rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 cursor-pointer"
+                              className="px-2.5 py-1.5 rounded-lg text-rose-600 hover:text-rose-700 hover:bg-rose-50 cursor-pointer text-xs font-bold"
                               title="Cancel Trip"
                             >
                               <Ban className="w-3.5 h-3.5" />
+                              <span>Cancel</span>
                             </button>
                           )}
-                          <button
-                            onClick={() => onOpenEditModal(trip)}
-                            className="bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold px-2 py-1.5 rounded-lg text-xs flex items-center gap-1 transition cursor-pointer"
-                            title="Edit details"
-                          >
-                            <Edit3 className="w-3.5 h-3.5 text-slate-500" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteClick(trip)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
-                            title="Delete"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                            <button
+                              onClick={() => onOpenEditModal(trip)}
+                              className="bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition cursor-pointer"
+                              title="Edit details"
+                            >
+                              <Edit3 className="w-3.5 h-3.5 text-slate-500" />
+                              <span>Edit</span>
+                            </button>
+                            <button
+                              onClick={() => handleDeleteClick(trip)}
+                              className="px-2.5 py-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 cursor-pointer text-xs font-bold"
+                              title="Delete"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Delete</span>
+                            </button>
                         </div>
                       </td>
                     </tr>
@@ -1481,7 +1378,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
               <div className="text-xs text-slate-600">
                 Customer: <strong>{tripToDelete.customer_name}</strong> ({tripToDelete.customer_phone})
               </div>
-              <div className="text-xs text-slate-500 truncate mt-1">
+              <div className="mt-1 break-words text-xs text-slate-500">
                 Route: {tripToDelete.pickup_location} → {tripToDelete.drop_location}
               </div>
             </div>
@@ -1526,28 +1423,19 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
 
       {/* Unassign Driver Confirmation Modal */}
       {tripToUnassign && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-                <UserMinus className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Unassign Driver</h3>
-                <p className="text-xs text-slate-500">Return ride to open broadcast</p>
-              </div>
-            </div>
-
-            <p className="mt-4 text-xs text-slate-600 leading-relaxed">
-              Cancel assignment for <strong>{tripToUnassign.driver_name || 'assigned driver'}</strong> on Trip #{formatTripId(tripToUnassign.trip_id)}? The trip will return to OPEN broadcast so another driver can accept it.
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-5 shadow-xl sm:p-6">
+            <h3 className="text-base font-bold text-slate-900">Unassign Driver</h3>
+            <p className="mt-3 break-words text-sm leading-relaxed text-slate-600">
+              Unassign <strong>{tripToUnassign.driver_name || 'assigned driver'}</strong> from Trip #{formatTripId(tripToUnassign.trip_id)}?
             </p>
 
-            <div className="mt-6 flex items-center justify-end gap-2.5">
+            <div className="mt-5 grid grid-cols-2 gap-2.5">
               <button
                 type="button"
                 disabled={isProcessingAction}
                 onClick={() => setTripToUnassign(null)}
-                className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition cursor-pointer"
+                className="min-h-10 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50 cursor-pointer disabled:opacity-50"
               >
                 Keep Assignment
               </button>
@@ -1566,9 +1454,8 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
                     setIsProcessingAction(false);
                   }
                 }}
-                className="px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-md shadow-amber-600/20"
+                className="min-h-10 rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-amber-700 cursor-pointer disabled:opacity-50"
               >
-                <UserMinus className="w-3.5 h-3.5" />
                 <span>{isProcessingAction ? 'Unassigning...' : 'Unassign Driver'}</span>
               </button>
             </div>

@@ -99,7 +99,7 @@ export const ActiveTripSpotlight: React.FC<ActiveTripSpotlightProps> = ({
             photoUrl={assignedDriver?.profile_photo_url}
             name={currentTrip.driver_name || 'Assigned Driver'}
             size="lg"
-            statusDot={true}
+            showStatusBadge={true}
             isOnline={assignedDriver?.is_online ?? true}
           />
           <div className="min-w-0 flex-1">

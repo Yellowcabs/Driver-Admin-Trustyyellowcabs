@@ -1,14 +1,6 @@
 import React, { useMemo } from 'react';
 import { FirestoreDriver, FirestoreTrip } from '../types';
 import {
-  CheckCircle2,
-  Radio,
-  Gauge,
-  Award,
-  IndianRupee,
-  Layers,
-} from 'lucide-react';
-import {
   BarChart,
   Bar,
   XAxis,
@@ -99,6 +91,9 @@ export const FleetAnalytics: React.FC<FleetAnalyticsProps> = ({ drivers, trips }
     (sum, t) => sum + (t.distance_km || 0),
     0
   );
+  const formattedTotalDistanceKm = Number.isFinite(totalDistanceKm)
+    ? totalDistanceKm.toFixed(2)
+    : '0.00';
 
   const averageFare =
     completedTrips.length > 0 ? Math.round(totalRevenue / completedTrips.length) : 0;
@@ -164,153 +159,100 @@ export const FleetAnalytics: React.FC<FleetAnalyticsProps> = ({ drivers, trips }
       }));
   }, [trips]);
 
-  // Driver leaderboard based on pre-indexed stats (instant O(Drivers) instead of O(Drivers * Trips))
-  const driverLeaderboard = useMemo(() => {
-    return drivers
-      .map((driver) => {
-        const stats = driverTripStatsMap.get(driver.driver_id);
-        return {
-          ...driver,
-          completedCount: stats?.count || (driver.total_trips || 0),
-          totalEarnings: stats?.earnings || 0,
-        };
-      })
-      .sort((a, b) => b.completedCount - a.completedCount);
-  }, [drivers, driverTripStatsMap]);
-
   return (
-    <div className="space-y-6 pb-6 animate-in fade-in duration-300">
+    <div className="min-w-0 space-y-3 overflow-x-hidden pb-24 animate-in fade-in duration-300 min-[768px]:max-[1024px]:space-y-4 min-[768px]:max-[1024px]:pb-8 lg:space-y-5 lg:pb-8">
       {/* 4 Clean KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4 w-full min-w-0">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 min-[768px]:max-[1024px]:grid-cols-4 min-[768px]:max-[1024px]:gap-3 lg:grid-cols-4">
         {/* Total Revenue */}
-        <div className="min-w-0 bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between gap-1.5 sm:gap-2">
-            <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider truncate">
+        <div className="flex min-h-[104px] min-w-0 flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 sm:min-h-[120px] sm:p-4">
+          <div className="flex min-w-0 items-center justify-between gap-1.5 sm:gap-2">
+            <p className="min-w-0 whitespace-nowrap text-[10px] font-semibold uppercase leading-tight tracking-wider text-slate-500 sm:text-[11px]">
               Total Revenue
             </p>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-200 shrink-0">
-              <IndianRupee className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            </div>
           </div>
-          <div className="mt-2 sm:mt-3 flex items-baseline gap-1.5 sm:gap-2 flex-wrap min-w-0">
-            <span className="text-xl sm:text-2xl lg:text-3xl font-bold text-slate-900 tracking-tight tabular-nums truncate">
+          <div className="mt-2 w-full min-w-0 sm:mt-3">
+            <span className="block max-w-full whitespace-nowrap text-[clamp(0.875rem,4vw,1.5rem)] font-bold leading-none tracking-tight text-slate-900 tabular-nums min-[768px]:max-[1024px]:text-[clamp(0.875rem,2vw,1.125rem)] lg:text-[clamp(1.125rem,1.7vw,1.875rem)]">
               ₹{totalRevenue.toLocaleString()}
-            </span>
-            <span className="text-[10px] sm:text-xs text-slate-400 font-medium truncate">
-              from {completedTrips.length} rides
             </span>
           </div>
         </div>
 
         {/* Online Fleet */}
-        <div className="min-w-0 bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between gap-1.5 sm:gap-2">
-            <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider truncate">
+        <div className="flex min-h-[104px] min-w-0 flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 sm:min-h-[120px] sm:p-4">
+          <div className="flex min-w-0 items-center justify-between gap-1.5 sm:gap-2">
+            <p className="min-w-0 whitespace-nowrap text-[10px] font-semibold uppercase leading-tight tracking-wider text-slate-500 sm:text-[11px]">
               Online Fleet
             </p>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-200 shrink-0">
-              <Radio className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-pulse" />
-            </div>
           </div>
-          <div className="mt-2 sm:mt-3 flex items-baseline gap-1.5 sm:gap-2 flex-wrap min-w-0">
-            <span className="text-xl sm:text-2xl lg:text-3xl font-bold text-emerald-600 tracking-tight tabular-nums truncate">
+          <div className="mt-2 w-full min-w-0 sm:mt-3">
+            <span className="block max-w-full whitespace-nowrap text-[clamp(0.875rem,4vw,1.5rem)] font-bold leading-none tracking-tight text-emerald-600 tabular-nums min-[768px]:max-[1024px]:text-[clamp(0.875rem,2vw,1.125rem)] lg:text-[clamp(1.125rem,1.7vw,1.875rem)]">
               {onlineDrivers.length}
-            </span>
-            <span className="text-[10px] sm:text-xs text-slate-400 font-medium truncate">
-              {freeDrivers.length} available
             </span>
           </div>
         </div>
 
         {/* Completed Rides */}
-        <div className="min-w-0 bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between gap-1.5 sm:gap-2">
-            <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider truncate">
+        <div className="flex min-h-[104px] min-w-0 flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 sm:min-h-[120px] sm:p-4">
+          <div className="flex min-w-0 items-center justify-between gap-1.5 sm:gap-2">
+            <p className="min-w-0 whitespace-nowrap text-[10px] font-semibold uppercase leading-tight tracking-wider text-slate-500 sm:text-[11px]">
               Completed Rides
             </p>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center border border-purple-200 shrink-0">
-              <CheckCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            </div>
           </div>
-          <div className="mt-2 sm:mt-3 flex items-baseline gap-1.5 sm:gap-2 flex-wrap min-w-0">
-            <span className="text-xl sm:text-2xl lg:text-3xl font-bold text-purple-700 tracking-tight tabular-nums truncate">
+          <div className="mt-2 w-full min-w-0 sm:mt-3">
+            <span className="block max-w-full whitespace-nowrap text-[clamp(0.875rem,4vw,1.5rem)] font-bold leading-none tracking-tight text-slate-900 tabular-nums min-[768px]:max-[1024px]:text-[clamp(0.875rem,2vw,1.125rem)] lg:text-[clamp(1.125rem,1.7vw,1.875rem)]">
               {completedTrips.length}
-            </span>
-            <span className="text-[10px] sm:text-xs text-slate-400 font-medium truncate">
-              {completionRate}% success
             </span>
           </div>
         </div>
 
         {/* Total Distance */}
-        <div className="min-w-0 bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between gap-1.5 sm:gap-2">
-            <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider truncate">
+        <div className="flex min-h-[104px] min-w-0 flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 sm:min-h-[120px] sm:p-4">
+          <div className="flex min-w-0 items-center justify-between gap-1.5 sm:gap-2">
+            <p className="min-w-0 whitespace-nowrap text-[10px] font-semibold uppercase leading-tight tracking-wider text-slate-500 sm:text-[11px]">
               Total Distance
             </p>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center border border-sky-200 shrink-0">
-              <Gauge className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            </div>
           </div>
-          <div className="mt-2 sm:mt-3 flex items-baseline gap-1.5 sm:gap-2 flex-wrap min-w-0">
-            <span className="text-xl sm:text-2xl lg:text-3xl font-bold text-sky-600 tracking-tight tabular-nums truncate">
-              {totalDistanceKm} km
-            </span>
-            <span className="text-[10px] sm:text-xs text-slate-400 font-medium truncate">
-              avg ₹{averageFare}/ride
+          <div className="mt-2 w-full min-w-0 sm:mt-3">
+            <span className="block max-w-full whitespace-nowrap text-[clamp(0.875rem,4vw,1.5rem)] font-bold leading-none tracking-tight text-slate-900 tabular-nums min-[768px]:max-[1024px]:text-[clamp(0.875rem,2vw,1.125rem)] lg:text-[clamp(1.125rem,1.7vw,1.875rem)]">
+              {formattedTotalDistanceKm} km
             </span>
           </div>
         </div>
       </div>
 
       {/* Useful Real Data Charts Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 gap-3 min-[900px]:max-[1024px]:grid-cols-3 lg:grid-cols-3">
         {/* Left: Trip Status Operations Breakdown */}
-        <div className="lg:col-span-2 bg-white rounded-2xl p-5 border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-            <div>
-              <h3 className="text-sm font-extrabold text-slate-900">
-                Rides Operational Status
-              </h3>
-              <p className="text-xs text-slate-500"></p>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-700 bg-slate-100 px-3 py-1 rounded-xl">
-                {trips.length} Total Bookings
-              </span>
-            </div>
+        <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 sm:p-4 min-[900px]:max-[1024px]:col-span-2 lg:col-span-2">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
+            <h3 className="text-sm font-bold text-slate-900">Ride Status</h3>
+            <span className="shrink-0 text-xs font-medium text-slate-500">
+              {trips.length} bookings
+            </span>
           </div>
 
-          {/* Operational Status Legend & Metric Badges */}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mt-3.5">
+          {/* Operational Status Summary */}
+          <div className="mt-1 divide-y divide-slate-100">
             {tripStatusData.map((s) => (
               <div
                 key={s.status}
-                className={`${s.bg} ${s.border} border rounded-xl p-2.5 flex flex-col justify-between shadow-2xs`}
+                className="flex min-h-10 items-center justify-between gap-4 py-2.5"
               >
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className={`w-2 h-2 rounded-full ${s.dot} shrink-0`} />
-                  <span className={`text-[11px] font-bold ${s.color} truncate`}>{s.status}</span>
-                </div>
-                <div className="mt-1.5 flex items-baseline justify-between">
-                  <span className={`text-base sm:text-lg font-black ${s.color} tabular-nums`}>
-                    {s.count}
-                  </span>
-                  <span className="text-[10px] text-slate-400 font-semibold">
-                    {trips.length > 0 ? Math.round((s.count / trips.length) * 100) : 0}%
-                  </span>
-                </div>
+                <span className={`min-w-0 text-sm font-medium ${s.color}`}>{s.status}</span>
+                <span className="shrink-0 text-sm font-bold text-slate-900 tabular-nums">{s.count}</span>
               </div>
             ))}
           </div>
 
-          <div className="h-56 mt-4">
+          <div className="mt-3 h-56 min-w-0 border-t border-slate-100 pt-3 sm:h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={tripStatusData} margin={{ top: 22, right: 10, left: -20, bottom: 0 }}>
+              <BarChart data={tripStatusData} margin={{ top: 18, right: 4, left: -8, bottom: 2 }} barCategoryGap="24%">
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                 <XAxis
                   dataKey="status"
-                  tick={{ fontSize: 11, fill: '#475569', fontWeight: 600 }}
+                  tick={{ fontSize: 9, fill: '#475569', fontWeight: 600 }}
+                  interval={0}
+                  height={34}
                   axisLine={{ stroke: '#e2e8f0' }}
                   tickLine={false}
                 />
@@ -324,18 +266,19 @@ export const FleetAnalytics: React.FC<FleetAnalyticsProps> = ({ drivers, trips }
                   cursor={{ fill: '#f8fafc' }}
                   contentStyle={{
                     backgroundColor: '#0f172a',
-                    borderRadius: '12px',
+                    borderRadius: '8px',
                     color: '#fff',
                     fontSize: '12px',
                     border: 'none',
-                    boxShadow: '0 10px 25px rgba(0,0,0,0.15)',
                   }}
+                  wrapperStyle={{ zIndex: 20 }}
                   formatter={(value: number) => [`${value} rides`, 'Total']}
                 />
                 <Bar
                   dataKey="count"
                   fill="#f59e0b"
                   minPointSize={8}
+                  maxBarSize={42}
                   radius={[6, 6, 0, 0]}
                 >
                   <LabelList
@@ -353,12 +296,11 @@ export const FleetAnalytics: React.FC<FleetAnalyticsProps> = ({ drivers, trips }
         </div>
 
         {/* Right: Vehicle Fleet Category Breakdown */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-2xs flex flex-col justify-between">
+        <div className="flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
-                <Layers className="w-4 h-4 text-sky-500" />
-                <span>Vehicle Fleet Mix</span>
+              <h3 className="text-sm font-bold text-slate-900">
+                Vehicle Fleet Mix
               </h3>
               <span className="text-xs text-slate-500 font-medium">{totalDrivers} registered</span>
             </div>
@@ -407,21 +349,20 @@ export const FleetAnalytics: React.FC<FleetAnalyticsProps> = ({ drivers, trips }
       </div>
 
       {/* Revenue by Vehicle Category (Real Firestore Data) */}
-      <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-2xs">
+      <div className="rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
           <div>
-            <h3 className="text-sm font-extrabold text-slate-900">
+            <h3 className="text-sm font-bold text-slate-900">
               Revenue by Vehicle Category
             </h3>
-            <p className="text-xs text-slate-500"></p>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-4">
+        <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 min-[768px]:max-[1024px]:grid-cols-5 min-[768px]:max-[1024px]:gap-2 lg:grid-cols-5">
           {categoryRevenueData.map((item) => (
             <div
               key={item.category}
-              className="bg-slate-50/90 rounded-xl p-3.5 border border-slate-200/90 flex flex-col justify-between"
+              className="flex min-w-0 flex-col justify-between rounded-lg border border-slate-200 bg-slate-50/60 p-3"
             >
               <div className="flex items-center justify-between">
                 <span className="font-bold text-slate-800 text-xs">{item.category}</span>
@@ -440,65 +381,6 @@ export const FleetAnalytics: React.FC<FleetAnalyticsProps> = ({ drivers, trips }
               </div>
             </div>
           ))}
-        </div>
-      </div>
-
-      {/* Driver Performance Leaderboard (Real Firestore Data) */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
-        <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Award className="w-4 h-4 text-amber-500" />
-            <h3 className="text-sm font-extrabold text-slate-900">Driver Performance Leaderboard</h3>
-          </div>
-          <span className="text-xs text-slate-500 font-medium">Real-time driver trip count</span>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-600">
-            <thead className="bg-slate-50 text-slate-700 uppercase font-bold text-[10px] tracking-wider border-b border-slate-200">
-              <tr>
-                <th className="py-3 px-4">Driver</th>
-                <th className="py-3 px-4">Vehicle & Category</th>
-                <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4 text-center">Completed Trips</th>
-                <th className="py-3 px-4 text-right">Total Revenue</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {driverLeaderboard.map((drv) => (
-                <tr key={drv.driver_id} className="hover:bg-slate-50 transition">
-                  <td className="py-3 px-4">
-                    <div>
-                      <div className="font-bold text-slate-900">{drv.driver_name}</div>
-                      <div className="text-[10px] text-slate-400 font-mono">{drv.mobile_number}</div>
-                    </div>
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="font-semibold text-slate-800">{drv.vehicle_category}</div>
-                    <div className="text-[10px] text-slate-400 font-mono">{drv.vehicle_number}</div>
-                  </td>
-                  <td className="py-3 px-4">
-                    <span
-                      className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                        drv.is_online
-                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                          : 'bg-slate-100 text-slate-600 border border-slate-200'
-                      }`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${drv.is_online ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-                      {drv.is_online ? 'Online' : 'Offline'}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-center font-bold text-slate-900">
-                    {drv.completedCount}
-                  </td>
-                  <td className="py-3 px-4 text-right font-black text-slate-900">
-                    ₹{drv.totalEarnings.toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
       </div>
     </div>

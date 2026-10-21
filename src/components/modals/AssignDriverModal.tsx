@@ -1,7 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { FirestoreTrip, FirestoreDriver } from '../../types';
-import { Car, Phone, Check, X, Search, Ban, Clock, AlertTriangle } from 'lucide-react';
-import { DriverAvatar } from '../DriverAvatar';
+import React, { useMemo, useState } from 'react';
+import { FirestoreDriver, FirestoreTrip } from '../../types';
 
 interface AssignDriverModalProps {
   trip: FirestoreTrip | null;
@@ -24,7 +22,6 @@ export const AssignDriverModal: React.FC<AssignDriverModalProps> = ({
   const [assignError, setAssignError] = useState<string | null>(null);
   const [assigningDriverId, setAssigningDriverId] = useState<string | null>(null);
 
-  // Map of driver_id -> ongoing / in-process trip (IN_PROGRESS or ACCEPTED)
   const busyDriversMap = useMemo(() => {
     const map = new Map<string, FirestoreTrip>();
     if (!trips || !Array.isArray(trips)) return map;
@@ -42,9 +39,7 @@ export const AssignDriverModal: React.FC<AssignDriverModalProps> = ({
   }, [trips, trip]);
 
   const getOngoingTripForDriver = (driverId: string, currentTripId?: string | null) => {
-    if (busyDriversMap.has(driverId)) {
-      return busyDriversMap.get(driverId)!;
-    }
+    if (busyDriversMap.has(driverId)) return busyDriversMap.get(driverId)!;
     if (currentTripId && trips) {
       const match = trips.find(
         (t) =>
@@ -66,19 +61,12 @@ export const AssignDriverModal: React.FC<AssignDriverModalProps> = ({
 
       const ongoingTrip = getOngoingTripForDriver(d.driver_id, d.current_trip_id);
       if (filterAvailableOnly && ongoingTrip) return false;
-
       if (!q) return true;
 
-      const idMatch = (d.driver_id || '').toLowerCase().includes(q);
-      const nameMatch = (d.driver_name || '').toLowerCase().includes(q);
-      const vehicleMatch = (d.vehicle_number || '').toLowerCase().includes(q);
-      const categoryMatch = (d.vehicle_category || '').toLowerCase().includes(q);
-      const phoneMatch = (d.mobile_number || '').toLowerCase().includes(q);
-
-      return idMatch || nameMatch || vehicleMatch || categoryMatch || phoneMatch;
+      return [d.driver_id, d.driver_name, d.vehicle_number, d.vehicle_category, d.mobile_number]
+        .some((value) => (value || '').toLowerCase().includes(q));
     });
 
-    // Sort available drivers to the top, drivers on ongoing trips below
     return result.sort((a, b) => {
       const aBusy = Boolean(getOngoingTripForDriver(a.driver_id, a.current_trip_id));
       const bBusy = Boolean(getOngoingTripForDriver(b.driver_id, b.current_trip_id));
@@ -88,242 +76,149 @@ export const AssignDriverModal: React.FC<AssignDriverModalProps> = ({
     });
   }, [drivers, searchQuery, filterOnlineOnly, filterAvailableOnly, busyDriversMap, trips, trip]);
 
-  // Counts
-  const availableCount = useMemo(() => {
-    return drivers.filter(
-      (d) => d.status === 'ACTIVE' && !getOngoingTripForDriver(d.driver_id, d.current_trip_id)
-    ).length;
-  }, [drivers, busyDriversMap, trips, trip]);
+  const availableCount = useMemo(
+    () => drivers.filter((d) => d.status === 'ACTIVE' && !getOngoingTripForDriver(d.driver_id, d.current_trip_id)).length,
+    [drivers, busyDriversMap, trips, trip]
+  );
 
-  const ongoingCount = useMemo(() => {
-    return drivers.filter(
-      (d) => d.status === 'ACTIVE' && Boolean(getOngoingTripForDriver(d.driver_id, d.current_trip_id))
-    ).length;
-  }, [drivers, busyDriversMap, trips, trip]);
+  const ongoingCount = useMemo(
+    () => drivers.filter((d) => d.status === 'ACTIVE' && Boolean(getOngoingTripForDriver(d.driver_id, d.current_trip_id))).length,
+    [drivers, busyDriversMap, trips, trip]
+  );
 
   if (!trip) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
-      <div className="w-full max-h-[92vh] sm:max-h-[88vh] sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-200">
-        {/* Sticky Header */}
-        <div className="px-4 sm:px-6 py-3.5 border-b border-slate-100 flex items-start justify-between shrink-0 bg-white">
-          <div>
-            <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
-              <Car className="w-4 h-4 text-amber-500" /> Assign Driver to Trip {trip.trip_id}
-            </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Pickup: <strong className="text-slate-700">{trip.pickup_location}</strong> &rarr;{' '}
-              <strong className="text-slate-700">{trip.drop_location}</strong>
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 flex items-center justify-center transition cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Error notification if assignment blocked */}
-        {assignError && (
-          <div className="mx-4 sm:mx-6 mt-3 bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs text-rose-800 flex items-center justify-between gap-2 animate-in fade-in shrink-0">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-              <span className="font-semibold">{assignError}</span>
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50">
+      <div className="min-h-screen w-full">
+        <header className="sticky top-0 z-20 border-b border-slate-200 bg-white">
+          <div className="mx-auto flex min-h-16 w-full max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
+            <div className="min-w-0">
+              <h1 className="break-words text-base font-bold leading-tight text-slate-900 sm:text-lg">Assign Driver</h1>
+              <p className="mt-0.5 break-words text-xs text-slate-500">Trip #{trip.trip_id}</p>
             </div>
-            <button
-              type="button"
-              onClick={() => setAssignError(null)}
-              className="text-rose-400 hover:text-rose-700 p-0.5"
-            >
-              <X className="w-3.5 h-3.5" />
+            <button type="button" onClick={onClose} className="min-h-10 shrink-0 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">
+              Back to Dispatch
             </button>
           </div>
-        )}
+        </header>
 
-        {/* Search & Filters */}
-        <div className="px-4 sm:px-6 py-3 border-b border-slate-100 bg-slate-50 space-y-2 shrink-0">
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Search Driver ID (e.g. DRV-101), Name, or Vehicle No..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-white border border-slate-200 rounded-xl pl-8 pr-8 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between text-[11px] flex-wrap gap-2">
-            <span className="text-slate-500">
-              <strong className="text-emerald-700">{availableCount} available</strong>
-              {ongoingCount > 0 && (
-                <> &bull; <span className="text-rose-600 font-semibold">{ongoingCount} on ongoing trip</span></>
-              )}
-            </span>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setFilterAvailableOnly(!filterAvailableOnly)}
-                className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition cursor-pointer ${
-                  filterAvailableOnly
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                {filterAvailableOnly ? '✓ Available Only' : 'Filter Available'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilterOnlineOnly(!filterOnlineOnly)}
-                className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition cursor-pointer ${
-                  filterOnlineOnly
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                {filterOnlineOnly ? '● Online Only' : 'Show All'}
-              </button>
+        <main className="mx-auto w-full max-w-6xl space-y-4 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
+          <section className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-2">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Pickup</p>
+              <p className="mt-1 break-words text-sm font-medium leading-snug text-slate-900">{trip.pickup_location}</p>
             </div>
-          </div>
-        </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Drop</p>
+              <p className="mt-1 break-words text-sm font-medium leading-snug text-slate-900">{trip.drop_location}</p>
+            </div>
+          </section>
 
-        {/* Driver List */}
-        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-3 space-y-2">
-          {filteredDrivers.length === 0 ? (
-            <p className="text-xs text-slate-400 text-center py-8">
-              No active drivers matching &quot;{searchQuery}&quot;.
-            </p>
-          ) : (
-            filteredDrivers.map((drv) => {
-              const ongoingTrip = getOngoingTripForDriver(drv.driver_id, drv.current_trip_id);
-              const isBusy = Boolean(ongoingTrip);
-
-              return (
-                <div
-                  key={drv.driver_id}
-                  className={`p-3 rounded-xl border transition flex items-center justify-between gap-3 text-xs shadow-2xs ${
-                    isBusy
-                      ? 'border-slate-200 bg-slate-50/80 opacity-85'
-                      : 'border-slate-200 bg-white hover:bg-amber-50/50 hover:border-amber-300'
-                  }`}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <DriverAvatar
-                      photoUrl={drv.photo_url}
-                      name={drv.driver_name}
-                      size="md"
-                      isOnline={drv.is_online}
-                      showStatusBadge={true}
-                    />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <h5 className="font-bold text-slate-900 truncate">{drv.driver_name}</h5>
-                        <span className="bg-amber-100 text-amber-900 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded">
-                          {drv.driver_id}
-                        </span>
-                        <span className="bg-slate-100 text-slate-700 text-[10px] font-bold px-1.5 py-0.2 rounded border border-slate-200">
-                          {drv.vehicle_category}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-600 font-mono font-bold mt-0.5 uppercase">
-                        {drv.vehicle_number}
-                      </p>
-                      <p className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5 font-mono">
-                        <Phone className="w-2.5 h-2.5" /> {drv.mobile_number}
-                      </p>
-
-                      {/* Prominent Ongoing Trip Status Indicator */}
-                      {isBusy && ongoingTrip && (
-                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                          <span className="bg-rose-100 text-rose-800 text-[10px] font-bold px-2 py-0.5 rounded border border-rose-200 flex items-center gap-1">
-                            <Clock className="w-2.5 h-2.5 text-rose-600 animate-pulse" />
-                            On Ongoing Trip #{ongoingTrip.trip_id} ({ongoingTrip.status === 'IN_PROGRESS' ? 'In Process' : 'Accepted'})
-                          </span>
-                          {ongoingTrip.drop_location && (
-                            <span className="text-[10px] text-slate-500 truncate max-w-[170px]" title={ongoingTrip.drop_location}>
-                              &rarr; {ongoingTrip.drop_location}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Action Button: Disabled if already on ongoing/in-process trip */}
-                  {isBusy && ongoingTrip ? (
-                    <div className="flex flex-col items-end gap-0.5 shrink-0">
-                      <button
-                        type="button"
-                        disabled
-                        title={`Driver ${drv.driver_name} is currently on ongoing trip #${ongoingTrip.trip_id} (${ongoingTrip.status}). Trips cannot be assigned to an ongoing driver.`}
-                        className="bg-slate-100 text-slate-400 font-bold px-3 py-1.5 rounded-lg text-xs border border-slate-200 cursor-not-allowed flex items-center gap-1.5 opacity-80"
-                      >
-                        <Ban className="w-3.5 h-3.5 text-rose-500" />
-                        <span>On Trip</span>
-                      </button>
-                      <span className="text-[9px] text-rose-600 font-semibold">Already on trip</span>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={Boolean(assigningDriverId)}
-                      onClick={async () => {
-                        if (isBusy) {
-                          setAssignError(`Driver ${drv.driver_name} is already on an ongoing trip. Cannot assign.`);
-                          return;
-                        }
-                        try {
-                          setAssigningDriverId(drv.driver_id);
-                          setAssignError(null);
-                          await onAssign(trip.doc_id || trip.trip_id, drv);
-                          onClose();
-                        } catch (err: any) {
-                          setAssignError(err?.message || 'Failed to assign driver.');
-                        } finally {
-                          setAssigningDriverId(null);
-                        }
-                      }}
-                      className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold px-3.5 py-1.5 rounded-lg text-xs shadow-xs transition flex items-center gap-1 cursor-pointer shrink-0 disabled:opacity-50"
-                    >
-                      {assigningDriverId === drv.driver_id ? (
-                        <span>Assigning...</span>
-                      ) : (
-                        <>
-                          <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                          <span>Assign</span>
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
-              );
-            })
+          {assignError && (
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-800">
+              <p className="break-words font-semibold">{assignError}</p>
+              <button type="button" onClick={() => setAssignError(null)} className="shrink-0 font-semibold text-rose-700 underline underline-offset-2">Dismiss</button>
+            </div>
           )}
-        </div>
 
-        {/* Sticky Footer */}
-        <div className="px-4 sm:px-6 py-3 border-t border-slate-100 bg-slate-50 flex items-center justify-between shrink-0 text-xs text-slate-500">
-          <span>
-            {availableCount} driver{availableCount !== 1 ? 's' : ''} ready to assign
-          </span>
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200 rounded-lg cursor-pointer transition"
-          >
-            Cancel
-          </button>
-        </div>
+          <section className="space-y-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <label className="min-w-0 flex-1">
+                <span className="sr-only">Search drivers</span>
+                <input
+                  type="text"
+                  placeholder="Search driver, ID, vehicle or phone"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                />
+              </label>
+              <div className="flex flex-wrap gap-2 text-xs">
+                <button type="button" onClick={() => setFilterAvailableOnly(!filterAvailableOnly)} className={`min-h-10 rounded-lg border px-3 font-semibold transition ${filterAvailableOnly ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>
+                  {filterAvailableOnly ? 'Available only' : 'All availability'}
+                </button>
+                <button type="button" onClick={() => setFilterOnlineOnly(!filterOnlineOnly)} className={`min-h-10 rounded-lg border px-3 font-semibold transition ${filterOnlineOnly ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>
+                  {filterOnlineOnly ? 'Online only' : 'All statuses'}
+                </button>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              <span><strong className="text-emerald-700">{availableCount}</strong> available</span>
+              {ongoingCount > 0 && <span className="text-rose-600">{ongoingCount} on ongoing trip</span>}
+              {searchQuery && <span>{filteredDrivers.length} matching</span>}
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            {filteredDrivers.length === 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-white px-4 py-10 text-center text-sm text-slate-500">No active drivers matching &quot;{searchQuery}&quot;.</div>
+            ) : (
+              filteredDrivers.map((drv) => {
+                const ongoingTrip = getOngoingTripForDriver(drv.driver_id, drv.current_trip_id);
+                const isBusy = Boolean(ongoingTrip);
+
+                return (
+                  <article key={drv.driver_id} className={`rounded-xl border bg-white p-4 transition ${isBusy ? 'border-slate-200 bg-slate-50/70' : 'border-slate-200 hover:border-amber-300'}`}>
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="grid min-w-0 flex-1 gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <div className="min-w-0 sm:col-span-2 lg:col-span-1">
+                          <p className="break-words text-sm font-bold leading-tight text-slate-900">{drv.driver_name}</p>
+                          <p className="mt-1 break-all text-xs text-slate-500">ID {drv.driver_id}</p>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Vehicle</p>
+                          <p className="mt-1 break-words text-xs font-semibold text-slate-900">{drv.vehicle_category || 'Not provided'}</p>
+                          <p className="break-all text-xs text-slate-600">{drv.vehicle_number || 'Not provided'}</p>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Phone</p>
+                          <p className="mt-1 break-all text-xs font-semibold text-slate-900">{drv.mobile_number || 'Not provided'}</p>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Status</p>
+                          <p className={`mt-1 break-words text-xs font-semibold ${isBusy ? 'text-rose-600' : drv.is_online ? 'text-emerald-700' : 'text-slate-500'}`}>
+                            {isBusy ? 'On ongoing trip' : drv.is_online ? 'Online · Available' : 'Offline · Available'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {isBusy ? (
+                        <button type="button" disabled title={`Driver ${drv.driver_name} is currently on ongoing trip #${ongoingTrip?.trip_id} (${ongoingTrip?.status}). Trips cannot be assigned to an ongoing driver.`} className="min-h-10 shrink-0 rounded-lg border border-slate-300 bg-slate-100 px-4 text-xs font-semibold text-slate-400 sm:w-28">
+                          On trip
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={Boolean(assigningDriverId)}
+                          onClick={async () => {
+                            if (isBusy) {
+                              setAssignError(`Driver ${drv.driver_name} is already on an ongoing trip. Cannot assign.`);
+                              return;
+                            }
+                            try {
+                              setAssigningDriverId(drv.driver_id);
+                              setAssignError(null);
+                              await onAssign(trip.doc_id || trip.trip_id, drv);
+                              onClose();
+                            } catch (err: any) {
+                              setAssignError(err?.message || 'Failed to assign driver.');
+                            } finally {
+                              setAssigningDriverId(null);
+                            }
+                          }}
+                          className="min-h-10 shrink-0 rounded-lg bg-amber-500 px-4 text-xs font-bold text-slate-950 transition hover:bg-amber-600 disabled:opacity-50 sm:w-28"
+                        >
+                          {assigningDriverId === drv.driver_id ? 'Assigning...' : 'Assign'}
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })
+            )}
+          </section>
+        </main>
       </div>
     </div>
   );

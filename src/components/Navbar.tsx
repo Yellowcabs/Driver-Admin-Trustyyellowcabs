@@ -73,7 +73,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const getTabTitle = (tab: AdminTab) => {
     switch (tab) {
       case 'dispatch':
-        return { title: 'Dispatch & Operations Dashboard', subtitle: 'Live rides queue, driver assignments & trip status' };
+        return { title: '', subtitle: '' };
       case 'analytics':
         return { title: 'Fleet Analytics & Performance', subtitle: 'Real-time revenue, category mix & driver performance' };
       case 'radar':
@@ -130,39 +130,43 @@ export const Navbar: React.FC<NavbarProps> = ({
   return (
     <>
       <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200/80 shadow-2xs">
-        <div className="w-full px-3 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-14 sm:h-16 gap-2 sm:gap-4">
+        <div className="w-full px-3 sm:px-6 min-[768px]:max-[1024px]:px-4 lg:mx-auto lg:max-w-[1760px] lg:px-6 xl:px-8 2xl:px-10">
+          <div className="flex min-h-14 items-center justify-between gap-1 py-2 sm:min-h-16 sm:gap-4">
             {/* Left Header Title / Breadcrumb (Desktop) & Mobile Brand */}
-            <div className="flex items-center gap-3 min-w-0">
+            <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
               {/* Mobile Drawer Hamburger Button */}
               <button
                 onClick={() => setIsMenuDrawerOpen(true)}
-                className="lg:hidden p-2 rounded-xl text-slate-700 hover:bg-slate-100 transition cursor-pointer shrink-0"
+                className="lg:hidden shrink-0 rounded-xl p-1.5 text-slate-700 transition hover:bg-slate-100 sm:p-2 cursor-pointer"
                 aria-label="Open Navigation Menu"
               >
                 <Menu className="w-5 h-5" />
               </button>
 
-              {/* Desktop Section Title */}
-              <div className="hidden lg:block min-w-0">
-                <h1 className="text-sm font-bold text-slate-900 tracking-tight leading-tight truncate">
-                  {title}
-                </h1>
-                <p className="text-[11px] text-slate-400 truncate">
-                  {subtitle}
-                </p>
-              </div>
+              {activeTab !== 'dispatch' && (
+                <>
+                  {/* Desktop Section Title */}
+                  <div className="hidden min-w-0 flex-1 lg:block">
+                    <h1 className="break-words text-sm font-bold leading-tight tracking-tight text-slate-900">
+                      {title}
+                    </h1>
+                    <p className="break-words text-[11px] leading-tight text-slate-400">
+                      {subtitle}
+                    </p>
+                  </div>
 
-              {/* Mobile Section Title */}
-              <div className="lg:hidden min-w-0">
-                <h1 className="text-sm font-bold text-slate-900 truncate">
-                  {title.split('&')[0].trim()}
-                </h1>
-              </div>
+                  {/* Mobile Section Title */}
+                  <div className="min-w-0 flex-1 lg:hidden">
+                    <h1 className="break-words text-xs font-bold leading-tight text-slate-900 sm:text-sm">
+                      {title.split('&')[0].trim()}
+                    </h1>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Middle Search Bar */}
-            <div className="flex-1 max-w-md mx-2 hidden md:block">
+            <div className={`flex-1 hidden md:block lg:flex-none lg:w-[clamp(360px,32vw,440px)] lg:max-w-[440px] ${activeTab === 'dispatch' ? 'mx-3 lg:mx-4' : 'mx-2 lg:mx-3'}`}>
               <div className="relative">
                 <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                 <input
@@ -170,7 +174,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   placeholder="Search anything (trips, driver name, vehicle #, OTP)..."
                   value={globalSearchQuery}
                   onChange={(e) => setGlobalSearchQuery(e.target.value)}
-                  className="w-full bg-slate-50 hover:bg-slate-100/70 focus:bg-white border border-slate-200/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-lg pl-9 pr-8 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 transition outline-none"
+                  className="w-full bg-slate-50 hover:bg-slate-100/70 focus:bg-white border border-slate-200/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-lg pl-9 pr-8 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 transition outline-none lg:min-h-10 lg:bg-white lg:py-2 lg:pl-10 lg:pr-9 lg:text-sm lg:shadow-sm"
                 />
                 {globalSearchQuery && (
                   <button
@@ -184,11 +188,11 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
 
             {/* Right Action Toolbar: Clean, Minimalist Single Hub */}
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex shrink-0 items-center gap-1 sm:gap-2">
               {/* Mobile Search Toggle */}
               <button
                 onClick={() => setIsSearchOpenMobile(!isSearchOpenMobile)}
-                className="md:hidden p-2 rounded-xl text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition cursor-pointer"
+                className="md:hidden rounded-xl p-1.5 text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 sm:p-2 cursor-pointer"
                 aria-label="Toggle search"
               >
                 <Search className="w-4 h-4" />
@@ -200,7 +204,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 title={`Cloud Status: ${connectionStatusText}`}
               >
                 <span className={`w-2 h-2 rounded-full ${isFirebaseConnected ? 'bg-emerald-500' : 'bg-amber-500'} ${isSyncing ? 'animate-ping' : ''}`} />
-                <span className="text-[11px] font-bold text-slate-600">
+                <span className="text-[11px] font-bold text-slate-600 min-[768px]:max-[836px]:hidden">
                   {isFirebaseConnected ? 'Cloud Live' : 'Sandbox'}
                 </span>
               </div>
@@ -208,7 +212,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               {/* Single Settings Hub Entry */}
               <button
                 onClick={() => onOpenSettingsModal('system')}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 hover:text-slate-950 bg-slate-100/90 hover:bg-slate-200/90 border border-slate-200/80 shadow-2xs transition-all cursor-pointer min-h-[36px] active:scale-[0.98]"
+                className="flex min-h-[36px] items-center gap-1.5 rounded-xl border border-slate-200/80 bg-slate-100/90 px-2 py-1.5 text-xs font-bold text-slate-700 shadow-2xs transition-all hover:bg-slate-200/90 hover:text-slate-950 active:scale-[0.98] sm:px-3 cursor-pointer"
                 title="System Settings & Security Controls"
               >
                 <Settings className="w-4 h-4 text-slate-600" />
@@ -222,7 +226,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               {onLogout && (
                 <button
                   onClick={onLogout}
-                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 hover:text-rose-600 bg-slate-100/90 hover:bg-rose-50 border border-slate-200/80 shadow-2xs transition-all cursor-pointer min-h-[36px] active:scale-[0.98]"
+                  className="flex min-h-[36px] items-center gap-1.5 rounded-xl border border-slate-200/80 bg-slate-100/90 px-2 py-1.5 text-xs font-bold text-slate-600 shadow-2xs transition-all hover:bg-rose-50 hover:text-rose-600 active:scale-[0.98] sm:px-3 cursor-pointer"
                   title="Log Out of Console"
                 >
                   <LogOut className="w-4 h-4" />
@@ -257,15 +261,15 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
           )}
           {/* Tablet Page Switcher Navigation Bar (Visible on Tablet screens sm:flex lg:hidden across all pages) */}
-          <div className="hidden sm:flex lg:hidden items-center justify-between pt-2 pb-2.5 border-t border-slate-100 gap-2 overflow-x-auto no-scrollbar select-none">
-            <div className="flex items-center gap-1.5 shrink-0">
+          <div className="hidden sm:flex lg:hidden items-center justify-between pt-2 pb-2.5 border-t border-slate-100 gap-2 overflow-x-auto no-scrollbar select-none min-[768px]:max-[1024px]:overflow-visible">
+            <div className="flex items-center gap-1.5 shrink-0 min-[768px]:max-[1024px]:min-w-0 min-[768px]:max-[1024px]:flex-1">
               {tabletNavItems.map((item) => {
                 const isActive = activeTab === item.id;
                 return (
                   <button
                     key={item.id}
                     onClick={() => setActiveTab(item.id)}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none whitespace-nowrap min-h-[38px] ${
+                    className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none whitespace-nowrap min-h-[38px] min-[768px]:max-[1024px]:min-w-0 min-[768px]:max-[1024px]:flex-1 min-[768px]:max-[1024px]:justify-center min-[768px]:max-[1024px]:gap-1.5 min-[768px]:max-[1024px]:px-2 ${
                       isActive
                         ? 'bg-indigo-600 text-white shadow-xs'
                         : 'bg-slate-50 hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-200/90'
@@ -293,7 +297,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Quick Dispatch Shortcut for Tablet */}
             <button
               onClick={onOpenNewTripModal}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-slate-950 shadow-xs transition-all cursor-pointer shrink-0 whitespace-nowrap min-h-[38px]"
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-slate-950 shadow-xs transition-all cursor-pointer shrink-0 whitespace-nowrap min-h-[38px] min-[768px]:max-[1024px]:px-3"
               title="Create & Dispatch New Ride"
             >
               <Zap className="w-3.5 h-3.5 fill-current" />
@@ -312,6 +316,8 @@ export const Navbar: React.FC<NavbarProps> = ({
         currentAdmin={currentAdmin}
         systemSettings={systemSettings}
         isFirebaseConnected={isFirebaseConnected}
+        isSyncing={isSyncing}
+        connectionStatusText={connectionStatusText}
         openTripCount={openTripCount}
         onlineDriverCount={onlineDriverCount}
         onOpenNewTripModal={onOpenNewTripModal}

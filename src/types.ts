@@ -157,7 +157,6 @@ export interface FirebaseConnectionConfig {
   storageBucket: string;
   authDomain?: string;
   databaseURL?: string;
-  adminSecret?: string;
   isLiveConnected: boolean;
 }
 

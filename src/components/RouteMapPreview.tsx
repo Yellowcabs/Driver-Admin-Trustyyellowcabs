@@ -31,6 +31,9 @@ interface RouteMapPreviewProps {
   onDropSelect?: (address: string, lat: number, lng: number) => void;
   className?: string;
   initialCollapsed?: boolean;
+  minimalOverlays?: boolean;
+  fillContainer?: boolean;
+  cleanAppearance?: boolean;
 }
 
 const DEFAULT_CENTER = { lat: 11.0168, lng: 76.9558 }; // Coimbatore Center
@@ -46,6 +49,9 @@ export const RouteMapPreview: React.FC<RouteMapPreviewProps> = ({
   onPickupSelect,
   onDropSelect,
   className = '',
+  minimalOverlays = false,
+  fillContainer = false,
+  cleanAppearance = false,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -53,6 +59,7 @@ export const RouteMapPreview: React.FC<RouteMapPreviewProps> = ({
 
   const [routeInfo, setRouteInfo] = useState<RouteCalcResult | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
+  const [mapError, setMapError] = useState<string | null>(null);
 
   // Map instances
   const googleMapRef = useRef<any>(null);
@@ -68,6 +75,29 @@ export const RouteMapPreview: React.FC<RouteMapPreviewProps> = ({
   const hasPickup = Boolean(pickupLat !== undefined && pickupLng !== undefined && !isNaN(pickupLat) && !isNaN(pickupLng));
   const hasDrop = Boolean(dropLat !== undefined && dropLng !== undefined && !isNaN(dropLat) && !isNaN(dropLng));
   const hasBoth = hasPickup && hasDrop;
+
+  const fitGoogleMapToRoute = useCallback(() => {
+    const map = googleMapRef.current;
+    const g = window.google;
+    const mapElement = mapContainerRef.current;
+
+    if (!map || !g?.maps || !mapElement || !hasBoth) return;
+
+    const bounds = new g.maps.LatLngBounds();
+    bounds.extend({ lat: pickupLat!, lng: pickupLng! });
+    bounds.extend({ lat: dropLat!, lng: dropLng! });
+    routeInfo?.path?.forEach((point) => bounds.extend({ lat: point.lat, lng: point.lng }));
+
+    const { width, height } = mapElement.getBoundingClientRect();
+    if (width <= 0 || height <= 0) return;
+
+    map.fitBounds(bounds, {
+      top: Math.min(76, Math.max(48, height * 0.18)),
+      right: Math.min(32, Math.max(20, width * 0.08)),
+      bottom: Math.min(44, Math.max(28, height * 0.1)),
+      left: Math.min(32, Math.max(20, width * 0.08)),
+    });
+  }, [hasBoth, pickupLat, pickupLng, dropLat, dropLng, routeInfo]);
 
   // Recalculate route whenever coordinates change
   useEffect(() => {
@@ -112,11 +142,32 @@ export const RouteMapPreview: React.FC<RouteMapPreviewProps> = ({
   // Initialize Map Engine (Google Maps JS or Leaflet fallback)
   useEffect(() => {
     let isMounted = true;
+    let initializationObserver: ResizeObserver | null = null;
 
     async function initMap() {
-      if (!mapContainerRef.current) return;
+      const mapElement = mapContainerRef.current;
+      if (!mapElement) return;
+
+      // Google Maps cannot render tiles when it is initialized before the
+      // flex-based mobile canvas has a measurable size. Wait for its first
+      // real measurement instead of creating a zero-sized map instance.
+      const { width, height } = mapElement.getBoundingClientRect();
+      if (width <= 0 || height <= 0) {
+        initializationObserver?.disconnect();
+        initializationObserver = new ResizeObserver(() => {
+          const nextSize = mapElement.getBoundingClientRect();
+          if (nextSize.width > 0 && nextSize.height > 0) {
+            initializationObserver?.disconnect();
+            initializationObserver = null;
+            initMap();
+          }
+        });
+        initializationObserver.observe(mapElement);
+        return;
+      }
 
       const g = await loadGoogleMaps();
+      if (!isMounted) return;
 
       if (g && g.maps && typeof g.maps.Map === 'function' && mapContainerRef.current) {
         try {
@@ -186,6 +237,9 @@ export const RouteMapPreview: React.FC<RouteMapPreviewProps> = ({
         }
       } catch (leafErr) {
         console.warn('Leaflet fallback error:', leafErr);
+        if (isMounted) {
+          setMapError('Map unavailable. Check the Google Maps API key or network connection.');
+        }
       }
     }
 
@@ -193,6 +247,7 @@ export const RouteMapPreview: React.FC<RouteMapPreviewProps> = ({
 
     return () => {
       isMounted = false;
+      initializationObserver?.disconnect();
     };
   }, []);
 
@@ -295,7 +350,7 @@ export const RouteMapPreview: React.FC<RouteMapPreviewProps> = ({
           googlePolylineRef.current = polyline;
         }
 
-        map.fitBounds(bounds, { top: 40, bottom: 40, left: 40, right: 40 });
+        fitGoogleMapToRoute();
       } else if (hasPickup) {
         map.setCenter({ lat: pickupLat!, lng: pickupLng! });
         map.setZoom(14);
@@ -366,28 +421,40 @@ export const RouteMapPreview: React.FC<RouteMapPreviewProps> = ({
         }
       });
     }
-  }, [hasPickup, hasDrop, hasBoth, pickupLat, pickupLng, dropLat, dropLng, routeInfo, pickupLocation, dropLocation]);
+  }, [hasPickup, hasDrop, hasBoth, pickupLat, pickupLng, dropLat, dropLng, routeInfo, pickupLocation, dropLocation, fitGoogleMapToRoute]);
 
   // ResizeObserver to prevent grey tiles and distortion
   useEffect(() => {
     const el = mapContainerRef.current;
     if (!el) return;
 
-    const resizeObserver = new ResizeObserver(() => {
-      if (leafletMapRef.current) {
-        leafletMapRef.current.invalidateSize();
-      }
-      if (googleMapRef.current && window.google?.maps) {
-        window.google.maps.event.trigger(googleMapRef.current, 'resize');
-      }
-    });
+    const resizeMapAndFitRoute = () => {
+      requestAnimationFrame(() => {
+        if (!mapContainerRef.current) return;
+
+        if (leafletMapRef.current) {
+          leafletMapRef.current.invalidateSize();
+        }
+        if (googleMapRef.current && window.google?.maps) {
+          window.google.maps.event.trigger(googleMapRef.current, 'resize');
+          fitGoogleMapToRoute();
+        }
+      });
+    };
+
+    const resizeObserver = new ResizeObserver(resizeMapAndFitRoute);
 
     resizeObserver.observe(el);
+    window.addEventListener('resize', resizeMapAndFitRoute);
+    window.visualViewport?.addEventListener('resize', resizeMapAndFitRoute);
+    resizeMapAndFitRoute();
 
     return () => {
       resizeObserver.disconnect();
+      window.removeEventListener('resize', resizeMapAndFitRoute);
+      window.visualViewport?.removeEventListener('resize', resizeMapAndFitRoute);
     };
-  }, [isExpanded]);
+  }, [isExpanded, fitGoogleMapToRoute]);
 
   // Re-center map button action
   const handleRecenter = () => {
@@ -437,25 +504,32 @@ export const RouteMapPreview: React.FC<RouteMapPreviewProps> = ({
   };
 
   return (
-    <div className={`relative rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm transition-all duration-200 ${className}`}>
+    <div className={`${cleanAppearance ? 'relative overflow-hidden rounded-xl bg-slate-100' : 'relative rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm'} transition-all duration-200 ${className}`}>
       {/* Main Map Canvas - Clean, Immersive & Responsive */}
       <div
-        className="relative w-full transition-all duration-300 bg-slate-100 h-72 sm:h-84 md:h-96"
+        className={`${fillContainer ? 'relative flex w-full min-h-0 flex-1 flex-col' : 'relative w-full'} transition-all duration-300 bg-slate-100 h-72 sm:h-84 md:h-96`}
       >
-        <div ref={mapContainerRef} className="w-full h-full" />
+        <div ref={mapContainerRef} className={fillContainer ? 'w-full min-h-0 flex-1' : 'w-full h-full'} />
 
-        {/* Minimal Floating Recenter Button */}
-        <button
-          type="button"
-          onClick={handleRecenter}
-          title="Recenter Route"
-          className="absolute top-3 left-3 z-20 p-2 rounded-xl bg-white/95 backdrop-blur-md hover:bg-white text-slate-700 shadow-md border border-slate-200 transition cursor-pointer hover:text-amber-600 active:scale-95"
-        >
-          <Crosshair className="w-4 h-4" />
-        </button>
+        {mapError && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-100/95 px-4 text-center text-xs font-semibold text-slate-600" role="alert">
+            {mapError}
+          </div>
+        )}
+
+        {!minimalOverlays && (
+          <button
+            type="button"
+            onClick={handleRecenter}
+            title="Recenter Route"
+            className="absolute top-3 left-3 z-20 p-2 rounded-xl bg-white/95 backdrop-blur-md hover:bg-white text-slate-700 shadow-md border border-slate-200 transition cursor-pointer hover:text-amber-600 active:scale-95"
+          >
+            <Crosshair className="w-4 h-4" />
+          </button>
+        )}
 
         {/* Temporary Notification Toast */}
-        {pinNotification && (
+        {!minimalOverlays && pinNotification && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-slate-900/95 text-white px-3.5 py-1.5 rounded-full text-xs font-bold shadow-lg border border-amber-500/50 flex items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-150">
             <Sparkles className="w-3.5 h-3.5 text-amber-400" />
             <span>{pinNotification}</span>
@@ -464,7 +538,7 @@ export const RouteMapPreview: React.FC<RouteMapPreviewProps> = ({
 
         {/* Floating Route Distance & Time Badge (When both coordinates available) */}
         {hasBoth && (
-          <div className="absolute top-2.5 right-2.5 sm:top-3 sm:right-3 z-20 bg-white/95 backdrop-blur-md px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl border border-slate-200 shadow-md flex items-center gap-2 sm:gap-3 text-xs animate-in fade-in zoom-in-95 duration-200">
+          <div className={`absolute top-2.5 right-2.5 sm:top-3 sm:right-3 z-20 bg-white/95 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-lg border border-slate-200 flex items-center gap-2 sm:gap-3 text-xs animate-in fade-in zoom-in-95 duration-200 ${cleanAppearance ? '' : 'backdrop-blur-md shadow-md'}`}>
             {isCalculating ? (
               <div className="flex items-center gap-1.5 text-amber-700 font-bold text-[11px] sm:text-xs">
                 <RefreshCw className="w-3 h-3 sm:w-3.5 sm:h-3.5 animate-spin" />
@@ -479,8 +553,9 @@ export const RouteMapPreview: React.FC<RouteMapPreviewProps> = ({
                 <div className="w-px h-5 sm:h-6 bg-slate-200" />
                 <div>
                   <span className="text-[9px] sm:text-[10px] uppercase tracking-wider font-bold text-slate-400 block leading-tight">Driving Time</span>
-                  <span className="text-xs sm:text-sm font-black font-mono text-amber-600 flex items-center gap-1">
-                    <Clock className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-amber-500" /> {routeInfo.durationText}
+                  <span className="text-xs sm:text-sm font-black font-mono text-amber-600">
+                    {!cleanAppearance && <Clock className="mr-1 inline-block h-2.5 w-2.5 text-amber-500 sm:h-3 sm:w-3" />}
+                    {routeInfo.durationText}
                   </span>
                 </div>
               </div>
@@ -489,12 +564,12 @@ export const RouteMapPreview: React.FC<RouteMapPreviewProps> = ({
         )}
 
         {/* Map Legend Overlay */}
-        <div className="absolute bottom-2.5 left-2.5 sm:bottom-3 sm:left-3 z-20 bg-white/95 backdrop-blur-md px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl border border-slate-200 shadow-md text-[10px] sm:text-[11px] space-y-1 sm:space-y-1.5 max-w-[200px] sm:max-w-xs">
+        {!minimalOverlays && <div className="absolute bottom-2.5 left-2.5 sm:bottom-3 sm:left-3 z-20 bg-white/95 backdrop-blur-md px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl border border-slate-200 shadow-md text-[10px] sm:text-[11px] space-y-1 sm:space-y-1.5 max-w-[200px] sm:max-w-xs">
           <div className="flex items-center gap-1.5 sm:gap-2">
             <span className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-emerald-500 text-white font-bold text-[9px] sm:text-[10px] flex items-center justify-center shrink-0">
               A
             </span>
-            <span className="font-semibold text-slate-800 truncate">
+            <span className="min-w-0 break-words font-semibold leading-tight text-slate-800">
               {pickupLocation || 'Pickup location not set'}
             </span>
           </div>
@@ -502,14 +577,14 @@ export const RouteMapPreview: React.FC<RouteMapPreviewProps> = ({
             <span className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-rose-500 text-white font-bold text-[9px] sm:text-[10px] flex items-center justify-center shrink-0">
               B
             </span>
-            <span className="font-semibold text-slate-800 truncate">
+            <span className="min-w-0 break-words font-semibold leading-tight text-slate-800">
               {dropLocation || 'Drop destination not set'}
             </span>
           </div>
-        </div>
+        </div>}
 
         {/* Swap button if both are available */}
-        {hasBoth && (
+        {!minimalOverlays && hasBoth && (
           <button
             type="button"
             onClick={handleSwapLocations}

@@ -1,11 +1,8 @@
 import React from 'react';
 import {
-  Car,
   TrendingUp,
   Navigation,
   Users,
-  Settings,
-  AlertTriangle,
   History,
   LayoutDashboard,
 } from 'lucide-react';
@@ -24,14 +21,10 @@ interface MobileBottomNavProps {
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   activeTab,
   setActiveTab,
-  onOpenMenuDrawer,
   openTripCount,
   onlineDriverCount,
-  systemSettings,
   isMenuDrawerOpen,
 }) => {
-  const isCutoffActive = !systemSettings.admin_online;
-
   const navItems = [
     {
       id: 'dispatch' as AdminTab,
@@ -70,7 +63,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
       aria-label="Mobile Bottom Navigation"
       className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-100 shadow-[0_-4px_25px_rgba(0,0,0,0.06)] px-2 py-1.5 pb-[max(0.6rem,env(safe-area-inset-bottom))]"
     >
-      <div className="flex items-center justify-around max-w-md mx-auto">
+      <div className="flex w-full items-center justify-around mx-auto">
         {navItems.map((item) => {
           const isActive = !isMenuDrawerOpen && activeTab === item.id;
           return (
@@ -79,7 +72,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
               onClick={() => {
                 setActiveTab(item.id);
               }}
-              className={`relative flex flex-col items-center justify-center py-1 px-1 rounded-2xl transition-all duration-200 cursor-pointer flex-1 max-w-[64px] ${
+              className={`relative flex flex-1 flex-col items-center justify-center py-1 px-1 rounded-2xl transition-all duration-200 cursor-pointer ${
                 isActive
                   ? 'text-slate-950'
                   : 'text-slate-400 hover:text-slate-700'
@@ -113,39 +106,6 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
           );
         })}
 
-        {/* Settings / Controls Hub Button */}
-        <button
-          onClick={onOpenMenuDrawer}
-          className={`relative flex flex-col items-center justify-center py-1 px-1 rounded-2xl transition-all duration-200 cursor-pointer flex-1 max-w-[64px] ${
-            isMenuDrawerOpen
-              ? 'text-slate-950'
-              : 'text-slate-400 hover:text-slate-700'
-          }`}
-        >
-          <div
-            className={`relative flex items-center justify-center transition-all ${
-              isMenuDrawerOpen
-                ? 'w-10 h-7 rounded-full bg-slate-950 text-white shadow-xs'
-                : 'w-7 h-7 text-slate-500'
-            }`}
-          >
-            <Settings className="w-4 h-4" />
-            {isCutoffActive && (
-              <span className="absolute -top-1 -right-2 w-4 h-4 bg-rose-600 text-white rounded-full text-[9px] font-black flex items-center justify-center animate-pulse shadow-xs">
-                !
-              </span>
-            )}
-          </div>
-          <span
-            className={`text-[10px] mt-1 tracking-tight leading-none ${
-              isMenuDrawerOpen
-                ? 'font-black text-slate-900'
-                : 'font-semibold text-slate-400'
-            }`}
-          >
-            Settings
-          </span>
-        </button>
       </div>
     </nav>
   );

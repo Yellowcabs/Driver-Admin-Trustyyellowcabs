@@ -16,6 +16,8 @@ interface GooglePlacesInputProps {
   iconType?: 'pickup' | 'drop';
   required?: boolean;
   className?: string;
+  suggestionGroup?: string;
+  isActive?: boolean;
 }
 
 export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
@@ -27,6 +29,8 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
   iconType = 'pickup',
   required = false,
   className = '',
+  suggestionGroup,
+  isActive = true,
 }) => {
   const [inputValue, setInputValue] = useState(value);
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
@@ -36,11 +40,19 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const activeRequestIdRef = useRef<number>(0);
+  const userTypingRef = useRef(false);
+  const lastUserValueRef = useRef<string | null>(null);
 
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const skipSearchForValueRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (value === lastUserValueRef.current) {
+      lastUserValueRef.current = null;
+      return;
+    }
+    userTypingRef.current = false;
+    activeRequestIdRef.current += 1;
     if (!value) {
       setInputValue('');
       skipSearchForValueRef.current = null;
@@ -55,8 +67,25 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
     }
   }, [value]);
 
+  useEffect(() => {
+    if (isActive) return;
+    userTypingRef.current = false;
+    activeRequestIdRef.current += 1;
+    setSuggestions([]);
+    setIsOpen(false);
+    setIsFocused(false);
+    setIsLoading(false);
+  }, [isActive]);
+
   // Debounced places search: triggers whenever input text changes and wasn't just selected
   useEffect(() => {
+    if (!userTypingRef.current || !isActive) {
+      setSuggestions([]);
+      setIsOpen(false);
+      setIsLoading(false);
+      return;
+    }
+
     // If the input value is empty or matches what the user just selected, do not search
     if (!inputValue || !inputValue.trim() || inputValue.trim().length < 1) {
       setSuggestions([]);
@@ -90,12 +119,33 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
     }, 160);
 
     return () => clearTimeout(timer);
-  }, [inputValue]);
+  }, [inputValue, isActive]);
+
+  useEffect(() => {
+    if (!suggestionGroup) return;
+
+    const closePeerSuggestions = (event: Event) => {
+      const detail = (event as CustomEvent<{ group: string; source: HTMLDivElement | null }>).detail;
+      if (detail?.group !== suggestionGroup || detail.source === wrapperRef.current) return;
+      userTypingRef.current = false;
+      activeRequestIdRef.current += 1;
+      setSuggestions([]);
+      setIsOpen(false);
+      setIsFocused(false);
+      setIsLoading(false);
+    };
+
+    window.addEventListener('google-places-focus', closePeerSuggestions);
+    return () => window.removeEventListener('google-places-focus', closePeerSuggestions);
+  }, [suggestionGroup]);
 
   // Close suggestions on outside click or touch
   useEffect(() => {
     function handleClickOutside(event: MouseEvent | TouchEvent) {
       if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+        userTypingRef.current = false;
+        activeRequestIdRef.current += 1;
+        setSuggestions([]);
         setIsOpen(false);
         setIsFocused(false);
       }
@@ -110,6 +160,8 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
 
   const handleSelectSuggestion = async (suggestion: PlaceSuggestion) => {
     const selectedText = suggestion.description || suggestion.mainText;
+    userTypingRef.current = false;
+    activeRequestIdRef.current += 1;
     skipSearchForValueRef.current = selectedText;
     setInputValue(selectedText);
     setSuggestions([]);
@@ -140,6 +192,8 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
   // If user typed manually and blurred or pressed Enter without clicking dropdown:
   // Geocode in background to get coordinates for routing/distance, but NEVER overwrite the user's typed text!
   const handleManualCommit = async () => {
+    userTypingRef.current = false;
+    activeRequestIdRef.current += 1;
     setIsOpen(false);
     const text = inputValue;
     if (!text || !text.trim()) return;
@@ -204,6 +258,13 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
           onChange={(e) => {
             const nextVal = e.target.value;
             skipSearchForValueRef.current = null;
+            lastUserValueRef.current = nextVal;
+            userTypingRef.current = true;
+            if (suggestionGroup) {
+              window.dispatchEvent(new CustomEvent('google-places-focus', {
+                detail: { group: suggestionGroup, source: wrapperRef.current },
+              }));
+            }
             setIsFocused(true);
             setInputValue(nextVal);
             onChange(nextVal);
@@ -237,8 +298,10 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
           }}
           onFocus={() => {
             setIsFocused(true);
-            if (suggestions.length > 0 && inputValue.trim().length > 0 && inputValue !== skipSearchForValueRef.current) {
-              setIsOpen(true);
+            if (suggestionGroup) {
+              window.dispatchEvent(new CustomEvent('google-places-focus', {
+                detail: { group: suggestionGroup, source: wrapperRef.current },
+              }));
             }
           }}
           placeholder={placeholder}
@@ -256,6 +319,8 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
               type="button"
               onMouseDown={(e) => {
                 e.preventDefault();
+                userTypingRef.current = false;
+                activeRequestIdRef.current += 1;
                 setInputValue('');
                 onChange('', undefined, undefined);
                 setSuggestions([]);
@@ -263,6 +328,8 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
                 inputRef.current?.focus();
               }}
               onClick={() => {
+                userTypingRef.current = false;
+                activeRequestIdRef.current += 1;
                 setInputValue('');
                 onChange('', undefined, undefined);
                 setSuggestions([]);
@@ -326,7 +393,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="font-semibold text-slate-900 truncate text-xs leading-snug">
+                  <p className="break-words text-xs font-semibold leading-snug text-slate-900">
                     {suggestion.mainText}
                   </p>
                   {suggestion.source && suggestion.source !== 'google' && (
@@ -342,7 +409,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
                   )}
                 </div>
                 {suggestion.secondaryText && (
-                  <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                  <p className="mt-0.5 break-words text-[11px] leading-snug text-slate-500">
                     {suggestion.secondaryText}
                   </p>
                 )}
@@ -362,7 +429,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
               className="w-full px-3.5 py-2 bg-slate-50/70 hover:bg-slate-100 text-left transition flex items-center gap-2 cursor-pointer text-[11px] text-slate-700 font-medium border-t border-slate-100"
             >
               <Check className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-              <span className="truncate">Use typed location: <span className="font-semibold text-slate-900">"{inputValue}"</span></span>
+              <span className="min-w-0 break-words">Use typed location: <span className="font-semibold text-slate-900">"{inputValue}"</span></span>
             </button>
           )}
         </div>

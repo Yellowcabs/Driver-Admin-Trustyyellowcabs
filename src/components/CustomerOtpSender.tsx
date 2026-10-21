@@ -100,7 +100,7 @@ export const CustomerOtpSender: React.FC<CustomerOtpSenderProps> = ({
           href={whatsappUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs cursor-pointer active:scale-95 text-center"
+          className="inline-flex min-h-[48px] items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-3 text-center text-xs font-bold text-white shadow-xs transition hover:bg-emerald-700 active:scale-95 cursor-pointer sm:min-h-0 sm:py-2"
         >
           <MessageCircle className="w-4 h-4 shrink-0" />
           <span>Send WhatsApp</span>
@@ -108,7 +108,7 @@ export const CustomerOtpSender: React.FC<CustomerOtpSenderProps> = ({
 
         <a
           href={smsUrl}
-          className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold transition shadow-xs cursor-pointer active:scale-95 text-center"
+          className="inline-flex min-h-[48px] items-center justify-center gap-1.5 rounded-xl bg-sky-600 px-3 py-3 text-center text-xs font-bold text-white shadow-xs transition hover:bg-sky-700 active:scale-95 cursor-pointer sm:min-h-0 sm:py-2"
         >
           <MessageSquare className="w-4 h-4 shrink-0" />
           <span>Send SMS</span>
@@ -117,7 +117,7 @@ export const CustomerOtpSender: React.FC<CustomerOtpSenderProps> = ({
         <button
           type="button"
           onClick={handleCopy}
-          className="col-span-2 sm:col-span-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer active:scale-95 text-center shadow-2xs"
+          className="col-span-2 inline-flex min-h-[48px] items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-3 text-center text-xs font-bold text-slate-700 shadow-2xs transition hover:bg-slate-100 active:scale-95 cursor-pointer sm:col-span-1 sm:min-h-0 sm:py-2"
         >
           {copied ? (
             <>

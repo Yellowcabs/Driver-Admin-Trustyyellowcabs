@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { FirestoreDriver, FirestoreTrip } from '../types';
+import { escapeHtml } from '../utils/html';
 import {
   Car,
   MapPin,
@@ -128,9 +129,12 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
   const [mapEngine, setMapEngine] = useState<'google' | 'leaflet'>('google');
   const [isEngineReady, setIsEngineReady] = useState<boolean>(false);
   const [hasApiKey, setHasApiKey] = useState<boolean>(Boolean(getGoogleMapsApiKey()));
+  const [mapError, setMapError] = useState<string | null>(null);
+  const [isMapLoading, setIsMapLoading] = useState<boolean>(false);
 
   // Google Maps instances ref
   const googleMapRef = useRef<any>(null);
+  const googleMapContainerRef = useRef<HTMLElement | null>(null);
   const googleMarkersRef = useRef<{ [key: string]: any }>({});
   const markerAnimationsRef = useRef<{ [key: string]: number }>({});
   const googleTripMarkersRef = useRef<any[]>([]);
@@ -165,8 +169,11 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
   const [searchSuggestions, setSearchSuggestions] = useState<PlaceSuggestion[]>([]);
   const [isSearchingLocation, setIsSearchingLocation] = useState<boolean>(false);
 
-  const activeTrips = trips.filter(
-    (t) => t.status === 'OPEN' || t.status === 'ACCEPTED' || t.status === 'IN_PROGRESS'
+  const activeTrips = useMemo(
+    () => trips.filter(
+      (t) => t.status === 'OPEN' || t.status === 'ACCEPTED' || t.status === 'IN_PROGRESS'
+    ),
+    [trips]
   );
 
   // Filtered drivers for map & sidebar (optimized for 2000+ drivers)
@@ -237,13 +244,57 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
     return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
   };
 
+  const cleanupMap = useCallback(() => {
+    Object.values(markerAnimationsRef.current).forEach((frameId) => cancelAnimationFrame(frameId));
+    markerAnimationsRef.current = {};
+    Object.values(googleMarkersRef.current).forEach((marker) => marker?.setMap?.(null));
+    googleMarkersRef.current = {};
+    googleTripMarkersRef.current.forEach((marker) => marker?.setMap?.(null));
+    googleTripMarkersRef.current = [];
+    googlePolylinesRef.current.forEach((polyline) => polyline?.setMap?.(null));
+    googlePolylinesRef.current = [];
+    googleRadiusCircleRef.current?.setMap?.(null);
+    googleRadiusCircleRef.current = null;
+    googleTrafficLayerRef.current?.setMap?.(null);
+    googleTrafficLayerRef.current = null;
+    activeInfoWindowRef.current?.close?.();
+    activeInfoWindowRef.current = null;
+    if (leafletMapRef.current) {
+      leafletMapRef.current.remove();
+      leafletMapRef.current = null;
+    }
+    googleMapRef.current = null;
+    googleMapContainerRef.current = null;
+    if (mapContainerRef.current) {
+      mapContainerRef.current.replaceChildren();
+    }
+    setIsEngineReady(false);
+  }, []);
+
   // Main Map Initializer
   const initMap = useCallback(async () => {
-    if (!mapContainerRef.current) return;
+    const container = mapContainerRef.current;
+    if (!container) return;
     if (typeof window === 'undefined') return;
 
+    if (container.clientWidth === 0 || container.clientHeight === 0) return;
+
+    const existingGoogleContainer = googleMapContainerRef.current;
+    if (googleMapRef.current && existingGoogleContainer !== container) {
+      cleanupMap();
+    }
+
+    setIsMapLoading(true);
+    setMapError(null);
+
     // Try Google Maps first
-    const g = await loadGoogleMaps();
+    let g: any = null;
+    try {
+      g = await loadGoogleMaps();
+    } catch (loadError) {
+      console.warn('Google Maps loading failed:', loadError);
+    }
+
     if (g && g.maps && typeof g.maps.Map === 'function' && mapContainerRef.current) {
       try {
         setMapEngine('google');
@@ -256,7 +307,7 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
 
         if (!googleMapRef.current) {
           const defaultCenter = { lat: 11.0168, lng: 76.9558 };
-          const map = new g.maps.Map(mapContainerRef.current, {
+          const map = new g.maps.Map(container, {
             center: defaultCenter,
             zoom: 12,
             mapTypeId:
@@ -285,8 +336,11 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
           }
 
           googleMapRef.current = map;
+          googleMapContainerRef.current = container;
           setIsEngineReady(true);
+          setMapError(null);
         }
+        setIsMapLoading(false);
         return;
       } catch (mapErr) {
         console.warn('Google Maps initialization failed, falling back to Leaflet:', mapErr);
@@ -313,24 +367,52 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
 
         leafletMapRef.current = map;
         setIsEngineReady(true);
+        setMapError(null);
       }
     } catch (err) {
       console.warn('Map initialization notice:', err);
+      setIsEngineReady(false);
+      setMapError('The map could not be loaded. Check the map connection and try again.');
+    } finally {
+      setIsMapLoading(false);
     }
-  }, [mapTheme, showTraffic]);
+  }, [cleanupMap, mapTheme, showTraffic]);
 
-  // Initial Mount
+  // Initialize only while the radar map is the visible view; settings/roster views
+  // can temporarily remove the map container from the DOM.
   useEffect(() => {
-    initMap();
+    if (showLayersModal || mobileViewMode !== 'map') return;
+    void initMap();
+  }, [initMap, mobileViewMode, showLayersModal]);
+
+  useEffect(() => cleanupMap, [cleanupMap]);
+
+  // Recalculate map size after tab switches and responsive layout changes.
+  useEffect(() => {
+    if (showLayersModal || mobileViewMode !== 'map' || !mapContainerRef.current) return;
+
+    const container = mapContainerRef.current;
+    const resizeMap = () => {
+      if (container.clientWidth === 0 || container.clientHeight === 0) return;
+      if (!googleMapRef.current && !leafletMapRef.current && !isMapLoading) {
+        void initMap();
+        return;
+      }
+      if (googleMapRef.current && (window as any).google?.maps) {
+        (window as any).google.maps.event.trigger(googleMapRef.current, 'resize');
+      }
+      if (leafletMapRef.current) leafletMapRef.current.invalidateSize();
+    };
+
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(resizeMap) : null;
+    observer?.observe(container);
+    const frame = requestAnimationFrame(resizeMap);
 
     return () => {
-      if (leafletMapRef.current) {
-        leafletMapRef.current.remove();
-        leafletMapRef.current = null;
-      }
-      googleMapRef.current = null;
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
     };
-  }, [initMap]);
+  }, [initMap, isEngineReady, isMapLoading, mobileViewMode, showLayersModal]);
 
   // Apply Map Theme and Traffic to Google Maps
   useEffect(() => {
@@ -428,31 +510,18 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
 
       // InfoWindow Content
       const infoContent = `
-        <div style="font-family: system-ui, -apple-system, sans-serif; min-width: 220px; padding: 4px; color: #0f172a;">
+        <div style="font-family: system-ui, -apple-system, sans-serif; min-width: 170px; padding: 8px 10px; color: #0f172a; border: 1px solid #e2e8f0; border-radius: 10px; background: #ffffff;">
           <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px;">
             <div>
-              <strong style="font-size: 13px; display: block;">${drv.driver_name}</strong>
-              <span style="font-size: 10px; color: #64748b; font-weight: 600;">ID: ${drv.driver_id}</span>
+              <strong style="font-size: 13px; display: block;">${escapeHtml(drv.driver_name)}</strong>
+
             </div>
             <span style="background: #FEF3C7; color: #92400E; font-size: 10px; font-weight: 800; padding: 3px 6px; border-radius: 6px;">
-              ${drv.vehicle_category}
+              ${escapeHtml(drv.vehicle_category)}
             </span>
           </div>
-          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 8px; margin-bottom: 8px; font-size: 11px;">
-            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
-              <span style="color: #64748b;">Vehicle:</span>
-              <strong style="color: #1e293b;">${drv.vehicle_number}</strong>
-            </div>
-            <div style="display: flex; justify-content: space-between;">
-              <span style="color: #64748b;">Phone:</span>
-              <a href="tel:${drv.mobile_number}" style="color: #0284c7; text-decoration: none; font-weight: 600;">${drv.mobile_number}</a>
-            </div>
-          </div>
-          <div style="display: flex; align-items: center; justify-content: space-between; font-size: 11px;">
-            <span style="color: ${drv.is_online ? '#059669' : '#64748b'}; font-weight: 700; display: flex; align-items: center; gap: 4px;">
-              ${drv.is_online ? '● Online & Available' : '○ Offline'}
-            </span>
-            <span style="font-size: 10px; color: #94a3b8; font-family: monospace;">${drv.latitude.toFixed(4)}, ${drv.longitude.toFixed(4)}</span>
+          <div style="margin-top: 6px; font-size: 11px; color: ${drv.is_online ? '#059669' : '#64748b'}; font-weight: 700;">
+            ${drv.is_online ? 'Online' : 'Offline'}
           </div>
         </div>
       `;
@@ -578,11 +647,11 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
           const pInfo = `
             <div style="font-family: system-ui, sans-serif; font-size: 11px; padding: 2px;">
               <div style="font-weight: bold; color: #059669; margin-bottom: 2px;">● Pickup Location</div>
-              <strong>${trip.customer_name}</strong> (${
+              <strong>${escapeHtml(trip.customer_name)}</strong> (${escapeHtml(
                 (trip as FirestoreTrip & { passenger_phone?: string }).passenger_phone || 'No phone'
-              })<br/>
-              <span style="color: #475569;">${trip.pickup_location}</span><br/>
-              <span style="color: #f59e0b; font-weight: bold;">Trip: ${trip.trip_id} | Fare: ₹${trip.estimated_fare || (trip as FirestoreTrip & { fare_amount?: number }).fare_amount || 0}</span>
+              )})<br/>
+              <span style="color: #475569;">${escapeHtml(trip.pickup_location)}</span><br/>
+              <span style="color: #f59e0b; font-weight: bold;">Trip: ${escapeHtml(trip.trip_id)} | Fare: ₹${Number(trip.estimated_fare || (trip as FirestoreTrip & { fare_amount?: number }).fare_amount || 0)}</span>
             </div>
           `;
           pickupMarker.addListener('click', () => {
@@ -610,7 +679,7 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
           const dInfo = `
             <div style="font-family: system-ui, sans-serif; font-size: 11px; padding: 2px;">
               <div style="font-weight: bold; color: #ef4444; margin-bottom: 2px;">● Destination</div>
-              <span style="color: #475569;">${trip.drop_location}</span>
+              <span style="color: #475569;">${escapeHtml(trip.drop_location)}</span>
             </div>
           `;
           dropMarker.addListener('click', () => {
@@ -704,18 +773,14 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
         });
 
         const popupContent = `
-          <div style="font-family: system-ui, sans-serif; min-width: 180px; padding: 4px;">
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-              <strong style="font-size: 13px; color: #0F172A;">${drv.driver_name}</strong>
-              <span style="background: #FEF3C7; color: #92400E; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 4px;">
-                ${drv.vehicle_category}
-              </span>
+          <div style="font-family: system-ui, sans-serif; min-width: 170px; padding: 8px 10px; color: #0F172A; border: 1px solid #E2E8F0; border-radius: 10px; background: #FFFFFF;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+              <strong style="font-size: 13px; line-height: 1.3;">${escapeHtml(drv.driver_name)}</strong>
+              <span style="font-size: 10px; color: #475569; font-weight: 700;">${escapeHtml(drv.vehicle_category)}</span>
             </div>
-            <p style="margin: 0; font-size: 11px; color: #475569;">Vehicle: <strong>${drv.vehicle_number}</strong></p>
-            <p style="margin: 0; font-size: 11px; color: #475569;">Phone: ${drv.mobile_number}</p>
-            <p style="margin: 4px 0 0 0; font-size: 11px; color: ${drv.is_online ? '#059669' : '#64748B'}; font-weight: bold;">
-              ${drv.is_online ? '● Online & Available' : '○ Offline'}
-            </p>
+            <div style="margin-top: 6px; font-size: 11px; color: ${drv.is_online ? '#059669' : '#64748B'}; font-weight: 700;">
+              ${drv.is_online ? 'Online' : 'Offline'}
+            </div>
           </div>
         `;
 
@@ -867,63 +932,194 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
     });
   };
 
+  if (showLayersModal) {
+    return (
+      <div className="min-h-[calc(100vh-7rem)] bg-slate-50 px-3 py-4 pb-24 sm:px-6 sm:py-6 min-[768px]:max-[1024px]:pb-6 lg:px-8">
+        <div className="mx-auto max-w-3xl lg:max-w-4xl">
+          <header className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
+            <h1 className="text-xl font-semibold tracking-tight text-slate-950">Map Settings</h1>
+            <button
+              type="button"
+              onClick={() => setShowLayersModal(false)}
+              className="min-h-10 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
+            >
+              Back to Radar
+            </button>
+          </header>
+
+          <main className="mt-5 space-y-6">
+            <section>
+              <h2 className="text-sm font-semibold text-slate-950">Map Style</h2>
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                {[
+                  { id: 'standard', label: 'Standard' },
+                  { id: 'satellite', label: 'Satellite' },
+                  { id: 'dark', label: 'Night' },
+                ].map((style) => (
+                  <button
+                    key={style.id}
+                    type="button"
+                    onClick={() => setMapTheme(style.id as 'standard' | 'satellite' | 'dark')}
+                    className={`min-h-11 rounded-lg border px-2 py-2 text-xs font-semibold transition sm:text-sm ${
+                      mapTheme === style.id
+                        ? 'border-slate-900 bg-slate-900 text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    {style.label}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="border-t border-slate-200 pt-5">
+              <h2 className="text-sm font-semibold text-slate-950">Map Overlays</h2>
+              <div className="mt-3 divide-y divide-slate-200 border-y border-slate-200">
+                {mapEngine === 'google' && (
+                  <button
+                    type="button"
+                    onClick={() => setShowTraffic(!showTraffic)}
+                    className="flex min-h-14 w-full items-center justify-between gap-3 bg-white px-3 text-left transition hover:bg-slate-50"
+                  >
+                    <span className="text-sm font-medium text-slate-800">Live Traffic</span>
+                    <span className={`text-xs font-semibold ${showTraffic ? 'text-emerald-700' : 'text-slate-500'}`}>
+                      {showTraffic ? 'On' : 'Off'}
+                    </span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowTripRoutes(!showTripRoutes)}
+                  className="flex min-h-14 w-full items-center justify-between gap-3 bg-white px-3 text-left transition hover:bg-slate-50"
+                >
+                  <span className="text-sm font-medium text-slate-800">Trip Pickups &amp; Lines</span>
+                  <span className={`text-xs font-semibold ${showTripRoutes ? 'text-amber-700' : 'text-slate-500'}`}>
+                    {showTripRoutes ? 'On' : 'Off'}
+                  </span>
+                </button>
+              </div>
+            </section>
+
+            <section className="border-t border-slate-200 pt-5">
+              <div className="flex min-h-14 items-center justify-between gap-3 border-y border-slate-200 bg-white px-3">
+                <h2 className="text-sm font-medium text-slate-800">Geofence Display</h2>
+                <button
+                  type="button"
+                  onClick={() => setShowRadiusGeofence(!showRadiusGeofence)}
+                  className={`text-xs font-semibold ${showRadiusGeofence ? 'text-indigo-700' : 'text-slate-500'}`}
+                >
+                  {showRadiusGeofence ? 'Enabled' : 'Disabled'}
+                </button>
+              </div>
+              {showRadiusGeofence && (
+                <div className="mt-3 grid grid-cols-5 gap-2">
+                  {[5, 10, 15, 25, 50].map((km) => (
+                    <button
+                      key={km}
+                      type="button"
+                      onClick={() => setRadiusKm(km)}
+                      className={`min-h-10 rounded-lg border text-xs font-semibold transition ${
+                        radiusKm === km
+                          ? 'border-indigo-600 bg-indigo-600 text-white'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      {km} km
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="border-t border-slate-200 pt-5">
+              <button
+                type="button"
+                onClick={centerOnAllFleet}
+                className="min-h-11 w-full rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
+              >
+                Fit All Fleet
+              </button>
+            </section>
+
+            <footer className="flex flex-col gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setShowLayersModal(false)}
+                className="min-h-11 rounded-lg border border-slate-300 bg-white px-5 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50 sm:min-w-32"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  centerOnAllFleet();
+                  setShowLayersModal(false);
+                }}
+                className="min-h-11 rounded-lg bg-amber-400 px-5 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 sm:min-w-40"
+              >
+                Apply Changes
+              </button>
+            </footer>
+          </main>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
-      className={`space-y-4 transition-all duration-200 ${
+      className={`space-y-4 min-[768px]:max-[1024px]:space-y-3 transition-all duration-200 ${
         isFullScreen
           ? 'fixed inset-0 z-50 bg-slate-950 p-2 sm:p-4 flex flex-col w-screen h-screen overflow-hidden'
-          : 'relative'
+          : 'relative pb-[max(5rem,calc(5rem_+_env(safe-area-inset-bottom)))] min-[768px]:max-[1024px]:pb-0 lg:pb-0'
       }`}
     >
       {/* Mobile Top View Switcher & Quick Filters (Mobile Only) */}
       <div className="lg:hidden space-y-2.5">
         {/* Segmented View Switcher: Live Map vs Fleet Roster */}
-        <div className="flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200/80 shadow-2xs">
+        <div className="flex items-center gap-1">
           <button
             onClick={() => handleSwitchMobileView('map')}
-            className={`flex-1 py-2 rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px] ${
+            className={`flex-1 rounded-lg text-xs font-semibold transition cursor-pointer min-h-11 ${
               mobileViewMode === 'map'
                 ? 'bg-slate-900 text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
             }`}
           >
-            <Radio className={`w-3.5 h-3.5 ${mobileViewMode === 'map' ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`} />
             <span>Live Radar Map</span>
           </button>
           <button
             onClick={() => handleSwitchMobileView('roster')}
-            className={`flex-1 py-2 rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px] ${
+            className={`flex-1 rounded-lg text-xs font-semibold transition cursor-pointer min-h-11 ${
               mobileViewMode === 'roster'
                 ? 'bg-slate-900 text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
             }`}
           >
-            <Car className={`w-3.5 h-3.5 ${mobileViewMode === 'roster' ? 'text-amber-400' : 'text-slate-400'}`} />
             <span>Fleet Roster ({filteredDrivers.length})</span>
           </button>
         </div>
 
         {/* Swipeable Horizontal Quick Filter Pills */}
-        <div className="flex items-center gap-2 overflow-x-auto scrollbar-none py-0.5 text-xs">
+        <div className="grid grid-cols-2 gap-2 py-0.5 text-xs sm:grid-cols-4">
           {/* Online Only Pill */}
           <button
             onClick={() => setOnlyOnline(!onlyOnline)}
-            className={`px-3 py-1.5 rounded-xl font-bold shrink-0 transition flex items-center gap-1.5 min-h-[36px] border ${
+            className={`w-full rounded-lg px-3 py-2 font-semibold transition min-h-11 border ${
               onlyOnline
                 ? 'bg-emerald-600 text-white border-emerald-700 shadow-xs'
                 : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
             }`}
           >
-            <span className={`w-2 h-2 rounded-full ${onlyOnline ? 'bg-white' : 'bg-emerald-500'}`} />
             <span>Online ({drivers.filter((d) => d.is_online).length})</span>
           </button>
 
           {/* Vehicle Category Dropdown */}
-          <div className="shrink-0">
+          <div className="min-w-0 w-full">
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
-              className="bg-white border border-slate-200 text-slate-800 font-bold rounded-xl px-2.5 py-1.5 text-xs min-h-[36px] focus:outline-none focus:ring-1 focus:ring-amber-500"
+              className="w-full bg-white border border-slate-200 text-slate-800 font-semibold rounded-lg px-3 py-2 text-xs min-h-11 focus:outline-none focus:ring-1 focus:ring-amber-500"
             >
               <option value="ALL">All Categories</option>
               <option value="MINI">MINI</option>
@@ -938,22 +1134,20 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
           {/* Trip Routes Pill */}
           <button
             onClick={() => setShowTripRoutes(!showTripRoutes)}
-            className={`px-3 py-1.5 rounded-xl font-bold shrink-0 transition flex items-center gap-1.5 min-h-[36px] border ${
+            className={`w-full rounded-lg px-3 py-2 font-semibold transition min-h-11 border ${
               showTripRoutes
                 ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-xs'
                 : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
             }`}
           >
-            <MapPin className="w-3.5 h-3.5 text-amber-600" />
             <span>Trips ({activeTrips.length})</span>
           </button>
 
           {/* Layers & Controls Modal Trigger */}
           <button
             onClick={() => setShowLayersModal(true)}
-            className="px-3 py-1.5 rounded-xl font-bold shrink-0 bg-white text-slate-800 border border-slate-200 hover:bg-slate-50 transition flex items-center gap-1.5 min-h-[36px]"
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-800 transition hover:bg-slate-50 min-h-11"
           >
-            <Layers className="w-3.5 h-3.5 text-indigo-500" />
             <span>Map Layers</span>
           </button>
         </div>
@@ -1200,64 +1394,57 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
             ? showSidebar
               ? 'grid-cols-1 lg:grid-cols-4 flex-1 min-h-0'
               : 'grid-cols-1 flex-1 min-h-0'
-            : 'grid-cols-1 lg:grid-cols-4 min-h-[500px] lg:h-[680px]'
+            : 'grid-cols-1 lg:grid-cols-4 min-h-0 lg:h-[calc(100dvh-12rem)] lg:min-h-[620px] lg:max-h-[900px]'
         }`}
       >
         {/* Main Map Stage: Visible on mobile when mode === 'map', and always visible on desktop */}
         <div
           className={`${
             isFullScreen && !showSidebar ? 'lg:col-span-1' : 'lg:col-span-3'
-          } rounded-2xl border border-slate-200 shadow-xs overflow-hidden relative bg-slate-900 flex flex-col ${
-            mobileViewMode === 'map' ? 'flex h-[calc(100vh-230px)] min-h-[480px]' : 'hidden'
-          } lg:flex lg:h-full`}
+          } rounded-2xl border border-slate-200 shadow-xs overflow-hidden relative bg-slate-100 flex flex-col ${
+            mobileViewMode === 'map'
+              ? 'flex h-[calc(100dvh_-_18rem_-_env(safe-area-inset-bottom))] min-h-0'
+              : 'hidden'
+          } min-[768px]:max-[1024px]:h-[calc(100dvh-16rem)] min-[768px]:max-[1024px]:min-h-[500px] lg:flex lg:h-full`}
         >
           {/* Floating Map Action Buttons (Fit All, Layers, Full Screen) */}
-          <div className="absolute top-3 right-3 z-20 flex items-center gap-1.5">
+          <div className="absolute left-3 right-3 top-[4.25rem] z-20 flex items-center justify-end gap-1.5 sm:left-auto sm:top-3">
             {/* Quick Fit All on Mobile/Desktop */}
             <button
               onClick={centerOnAllFleet}
-              className="bg-white/95 hover:bg-white text-slate-900 p-2 rounded-xl border border-slate-200 shadow-md text-xs font-bold flex items-center gap-1 backdrop-blur-xs transition cursor-pointer min-h-[36px]"
+              className="min-h-10 rounded-lg border border-slate-200 bg-white/95 px-2.5 py-2 text-[11px] font-semibold text-slate-900 shadow-md backdrop-blur-xs transition hover:bg-white cursor-pointer"
               title="Fit All Fleet on Map"
             >
-              <Compass className="w-4 h-4 text-amber-500" />
-              <span className="hidden sm:inline text-[11px]">Fit All</span>
+              <span>Fit All</span>
             </button>
 
             {/* Quick Layers Button on Map */}
             <button
               onClick={() => setShowLayersModal(true)}
-              className="bg-white/95 hover:bg-white text-slate-900 p-2 rounded-xl border border-slate-200 shadow-md text-xs font-bold flex items-center gap-1 backdrop-blur-xs transition cursor-pointer min-h-[36px]"
+              className="min-h-10 rounded-lg border border-slate-200 bg-white/95 px-2.5 py-2 text-[11px] font-semibold text-slate-900 shadow-md backdrop-blur-xs transition hover:bg-white cursor-pointer"
               title="Map Layers & Themes"
             >
-              <Layers className="w-4 h-4 text-indigo-500" />
-              <span className="hidden sm:inline text-[11px]">Layers</span>
+              <span>Layers</span>
             </button>
 
             {/* Full Screen Button */}
             <button
               onClick={toggleFullScreenMode}
-              className="bg-white/95 hover:bg-white text-slate-900 p-2 rounded-xl border border-slate-200 shadow-md text-xs font-bold flex items-center gap-1 backdrop-blur-xs transition cursor-pointer min-h-[36px]"
+              className="min-h-10 rounded-lg border border-slate-200 bg-white/95 px-2.5 py-2 text-[11px] font-semibold text-slate-900 shadow-md backdrop-blur-xs transition hover:bg-white cursor-pointer"
               title={isFullScreen ? 'Exit Full Screen' : 'Full Screen Radar'}
             >
               {isFullScreen ? (
-                <>
-                  <Minimize2 className="w-4 h-4 text-amber-600" />
-                  <span className="hidden sm:inline text-[11px]">Exit</span>
-                </>
+                <span>Exit</span>
               ) : (
-                <>
-                  <Maximize2 className="w-4 h-4 text-amber-600" />
-                  <span className="hidden sm:inline text-[11px]">Full</span>
-                </>
+                <span>Full</span>
               )}
             </button>
           </div>
 
           {/* Quick Location Search Bar Overlay */}
-          <div className="absolute top-3 left-3 w-[210px] sm:w-72 z-20">
+          <div className="absolute left-3 right-3 top-3 z-20 sm:right-[170px] sm:max-w-md">
             <div className="relative">
               <div className="relative flex items-center bg-white/95 backdrop-blur-md rounded-xl border border-slate-200 shadow-md px-2.5 py-1.5">
-                <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 mr-1.5" />
                 <input
                   type="text"
                   placeholder="Jump to place..."
@@ -1279,10 +1466,9 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
                       onClick={() => handleSelectSearchedPlace(sugg)}
                       className="w-full text-left px-3 py-2 text-xs hover:bg-amber-50 border-b border-slate-100 last:border-none flex items-start gap-2 transition"
                     >
-                      <MapPin className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
                       <div>
                         <p className="font-bold text-slate-900">{sugg.mainText}</p>
-                        <p className="text-[10px] text-slate-500 truncate">{sugg.secondaryText}</p>
+                        <p className="break-words text-[10px] leading-snug text-slate-500">{sugg.secondaryText}</p>
                       </div>
                     </button>
                   ))}
@@ -1293,6 +1479,30 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
 
           {/* Map Canvas Container */}
           <div ref={mapContainerRef} className="w-full h-full z-10" />
+
+          {(isMapLoading || mapError) && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-100/95 p-6 text-center">
+              {mapError ? (
+                <div className="max-w-sm">
+                  <p className="text-sm font-semibold text-slate-900">Map unavailable</p>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500">{mapError}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      cleanupMap();
+                      setMapError(null);
+                      void initMap();
+                    }}
+                    className="mt-4 min-h-10 rounded-lg bg-amber-400 px-4 py-2 text-xs font-semibold text-slate-950 transition hover:bg-amber-300"
+                  >
+                    Retry Map
+                  </button>
+                </div>
+              ) : (
+                <p className="text-sm font-medium text-slate-600">Loading map…</p>
+              )}
+            </div>
+          )}
 
           {/* Collapsible Radar Legend (Bottom-Left) */}
           <div className="absolute bottom-3 left-3 z-20">
@@ -1345,64 +1555,47 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
 
           {/* Floating Mobile Selected Driver Action Card */}
           {selectedDriver && (
-            <div className="absolute bottom-3 left-3 right-3 sm:left-auto sm:right-3 sm:w-96 z-30 bg-white/98 backdrop-blur-md rounded-2xl shadow-2xl border border-slate-200 p-3.5 animate-in slide-in-from-bottom-2 duration-150">
+            <div className="absolute bottom-3 left-3 right-3 sm:left-auto sm:right-3 sm:w-96 z-30 rounded-xl border border-slate-200 bg-white p-3 shadow-lg animate-in slide-in-from-bottom-2 duration-150">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="font-extrabold text-slate-900 text-sm truncate">
-                        {selectedDriver.driver_name}
-                      </span>
-                      <span className="bg-amber-100 text-amber-900 text-[10px] font-extrabold px-1.5 py-0.2 rounded font-mono">
-                        {selectedDriver.vehicle_category}
-                      </span>
-                      <span
-                        className={`text-[9px] font-black px-1.5 py-0.2 rounded-full border ${
-                          selectedDriver.is_online
-                            ? selectedDriver.current_trip_id
-                              ? 'bg-purple-50 text-purple-700 border-purple-200'
-                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : 'bg-slate-100 text-slate-600 border-slate-200'
-                        }`}
-                      >
-                        {selectedDriver.is_online
-                          ? selectedDriver.current_trip_id
-                            ? 'IN-TRIP'
-                            : 'ONLINE FREE'
-                          : 'OFFLINE'}
-                      </span>
-                    </div>
-                    <div className="text-[11px] text-slate-500 font-mono mt-0.5 flex items-center gap-2">
-                      <span className="font-bold text-slate-700">{selectedDriver.vehicle_number}</span>
-                      <span>&bull;</span>
-                      <span>ID: {selectedDriver.driver_id}</span>
-                    </div>
+                  <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                    <span className="break-words text-sm font-extrabold text-slate-900">
+                      {selectedDriver.driver_name}
+                    </span>
+                    <span className="text-xs font-semibold text-slate-500">
+                      &middot; {selectedDriver.vehicle_category}
+                    </span>
                   </div>
+                  <div className="mt-0.5 break-words text-[11px] font-mono text-slate-600">
+                    {selectedDriver.vehicle_number} &middot; ID {selectedDriver.driver_id}
+                  </div>
+                  <div className={`mt-1 text-[11px] font-bold ${selectedDriver.is_online ? 'text-emerald-600' : 'text-slate-500'}`}>
+                    {selectedDriver.is_online ? 'Online' : 'Offline'}
+                  </div>
+                </div>
 
                 <button
                   onClick={() => setSelectedDriver(null)}
-                  className="w-7 h-7 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 flex items-center justify-center shrink-0 cursor-pointer"
+                  className="min-h-9 shrink-0 rounded-lg px-2 text-xs font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-700 cursor-pointer"
                   title="Dismiss card"
                 >
-                  <X className="w-4 h-4" />
+                  Close
                 </button>
               </div>
 
-              {/* Action Buttons: Big Call Button + Focus + Assign */}
-              <div className="mt-3 pt-2.5 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs">
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                 <a
                   href={`tel:${selectedDriver.mobile_number}`}
-                  className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-3 rounded-xl min-h-[44px] shadow-xs text-xs cursor-pointer"
+                  className="flex min-h-11 items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 cursor-pointer"
                 >
-                  <Phone className="w-3.5 h-3.5" />
                   <span>Call Driver</span>
                 </a>
 
                 <button
                   onClick={() => recenterOnDriver(selectedDriver)}
-                  className="flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold py-2 px-3 rounded-xl min-h-[44px] text-xs cursor-pointer"
+                  className="flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
                 >
-                  <Compass className="w-3.5 h-3.5 text-amber-500" />
-                  <span>Focus Radar</span>
+                  <span>Focus Map</span>
                 </button>
 
                 {onOpenAssignModal && activeTrips.length > 0 && selectedDriver.is_online && !selectedDriver.current_trip_id && (
@@ -1411,9 +1604,8 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
                       const firstOpenTrip = activeTrips.find((t) => t.status === 'OPEN');
                       if (firstOpenTrip) onOpenAssignModal(firstOpenTrip);
                     }}
-                    className="col-span-2 flex items-center justify-center gap-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black py-2.5 px-3 rounded-xl min-h-[44px] text-xs shadow-xs cursor-pointer"
+                    className="col-span-2 flex min-h-11 items-center justify-center rounded-lg bg-amber-500 px-3 py-2.5 text-xs font-black text-slate-950 hover:bg-amber-400 cursor-pointer"
                   >
-                    <Zap className="w-3.5 h-3.5" />
                     <span>Assign Open Trip</span>
                   </button>
                 )}
@@ -1424,47 +1616,25 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
 
         {/* Driver Radar Roster: Visible on mobile when mode === 'roster', and always visible on desktop */}
         <div
-          className={`bg-white rounded-2xl border border-slate-200 shadow-xs p-3.5 sm:p-4 flex flex-col ${
+          className={`bg-white rounded-xl border border-slate-200 p-3 sm:p-4 flex flex-col ${
             mobileViewMode === 'roster' ? 'flex h-[calc(100vh-230px)] min-h-[480px]' : 'hidden'
           } lg:flex lg:h-full overflow-hidden lg:col-span-1`}
         >
           {/* Header */}
-          <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
-            <div>
-              <h3 className="text-xs font-black uppercase text-slate-900 tracking-wider">
-                Fleet Radar ({filteredDrivers.length})
-              </h3>
-              <p className="text-[10px] text-slate-500">
-                {drivers.length > 500
-                  ? `Searching across ${drivers.length.toLocaleString()} drivers`
-                  : 'Live GPS tracking stream'}
-              </p>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] text-emerald-700 font-extrabold bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-200">
-                {filteredDrivers.filter((d) => d.is_online).length} LIVE
-              </span>
-              {/* On mobile, quick button to jump back to map */}
-              <button
-                onClick={() => handleSwitchMobileView('map')}
-                className="lg:hidden p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold flex items-center gap-1"
-                title="View Map"
-              >
-                <Radio className="w-3 h-3 text-emerald-600" />
-                <span>Map</span>
-              </button>
-            </div>
+          <div className="mb-3 border-b border-slate-200 pb-3">
+            <h3 className="text-sm font-semibold tracking-tight text-slate-950">
+              Fleet Roster ({filteredDrivers.length})
+            </h3>
           </div>
 
           {/* Quick Search Driver by ID, Name, Plate or Phone */}
           <div className="mb-2 relative">
-            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="Search by name, plate, ID..."
+              placeholder="Search driver, ID or vehicle"
               value={driverSearchQuery}
               onChange={(e) => setDriverSearchQuery(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-7 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white"
+              className="w-full min-h-11 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
             />
             {driverSearchQuery && (
               <button
@@ -1479,7 +1649,7 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
           </div>
 
           {/* Drivers Scroll List */}
-          <div className="space-y-2 flex-1 overflow-y-auto pr-1">
+          <div className="flex-1 space-y-0 overflow-y-auto pr-1">
             {visibleDrivers.map((drv) => {
               const isSelected = selectedDriver?.driver_id === drv.driver_id;
               const hasTrip = Boolean(drv.current_trip_id);
@@ -1491,57 +1661,36 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
                     setSelectedDriver(drv);
                     if (onSelectDriver) onSelectDriver(drv);
                   }}
-                  className={`p-2.5 rounded-xl border text-xs cursor-pointer transition ${
+                  className={`border-b px-1 py-3 text-xs cursor-pointer transition last:border-b-0 ${
                     isSelected
-                      ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-400/20 shadow-xs'
+                      ? 'bg-amber-50 text-slate-950'
                       : 'bg-white hover:bg-slate-50 border-slate-200'
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-1">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span
-                        className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                          drv.is_online
-                            ? hasTrip
-                              ? 'bg-purple-600 animate-pulse'
-                              : 'bg-emerald-500'
-                            : 'bg-slate-300'
-                        }`}
-                      />
-                      <strong className="font-extrabold text-slate-900 truncate">
-                        {drv.driver_name}
-                      </strong>
+                  <div className="min-w-0">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <strong className="block break-words text-sm font-semibold text-slate-950">
+                          {drv.driver_name}
+                        </strong>
+                        <p className="mt-1 break-words text-[11px] font-medium text-slate-500">
+                          {drv.vehicle_category || 'STD'} · {drv.vehicle_number}
+                        </p>
+                      </div>
+                      <span className={`shrink-0 pt-0.5 text-[10px] font-semibold ${drv.is_online ? (hasTrip ? 'text-purple-700' : 'text-emerald-700') : 'text-slate-500'}`}>
+                        {drv.is_online ? (hasTrip ? 'In Trip' : 'Online') : 'Offline'}
+                      </span>
                     </div>
-
-                    <span className="text-[10px] font-black font-mono bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded shrink-0">
-                      {drv.vehicle_category || 'STD'}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between text-[11px] text-slate-500 mt-1.5">
-                    <span className="font-mono text-slate-600 font-bold">{drv.vehicle_number}</span>
-                    <span
-                      className={`text-[9px] font-black px-1.5 py-0.2 rounded-full border ${
-                        drv.is_online
-                          ? hasTrip
-                            ? 'bg-purple-50 text-purple-700 border-purple-200'
-                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : 'bg-slate-100 text-slate-600 border-slate-200'
-                      }`}
-                    >
-                      {drv.is_online ? (hasTrip ? 'IN-TRIP' : 'ONLINE') : 'OFFLINE'}
-                    </span>
                   </div>
 
                   {/* Quick Action Row */}
-                  <div className="flex items-center justify-between pt-2 mt-2 border-t border-slate-100 gap-1.5">
+                  <div className="mt-3 grid grid-cols-2 gap-2">
                     <a
                       href={`tel:${drv.mobile_number}`}
                       onClick={(e) => e.stopPropagation()}
-                      className="text-emerald-700 font-bold flex items-center gap-1 hover:underline min-h-[36px] px-2 rounded-lg bg-emerald-50"
+                      className="flex min-h-10 items-center justify-center rounded-lg bg-emerald-600 px-2 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700"
                     >
-                      <Phone className="w-3 h-3 text-emerald-600" />
-                      <span>{drv.mobile_number}</span>
+                      Call Driver
                     </a>
 
                     <button
@@ -1549,11 +1698,10 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
                         e.stopPropagation();
                         recenterOnDriver(drv);
                       }}
-                      className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-lg text-[10px] flex items-center gap-1 transition cursor-pointer min-h-[36px]"
+                      className="min-h-10 rounded-lg border border-amber-500 bg-white px-2 py-2 text-xs font-semibold text-amber-800 transition hover:bg-amber-50 cursor-pointer"
                       title="Focus on Radar Map"
                     >
-                      <Compass className="w-3.5 h-3.5" />
-                      <span>Focus Map</span>
+                      Focus Map
                     </button>
                   </div>
                 </div>
@@ -1562,7 +1710,6 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
 
             {visibleDrivers.length === 0 && (
               <div className="p-8 text-center text-slate-400 space-y-2">
-                <Car className="w-8 h-8 mx-auto opacity-30" />
                 <p className="text-xs font-semibold">No fleet vehicles match this filter</p>
                 <button
                   onClick={() => {
@@ -1580,36 +1727,51 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
 
           {/* Selected Driver Desktop Detail Box */}
           {selectedDriver && (
-            <div className="hidden lg:block mt-3 pt-3 border-t border-slate-200 text-xs">
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <strong className="text-slate-900 block font-bold">
+            <div className="hidden lg:block mt-3 border-t border-slate-200 pt-3 text-xs">
+              <div className="space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                      <strong className="break-words font-semibold text-slate-900">
                       {selectedDriver.driver_name}
-                    </strong>
-                    <span className="font-mono text-[10px] text-slate-500">
-                      ID: {selectedDriver.driver_id}
-                    </span>
+                      </strong>
+                      <span className="text-[10px] font-semibold text-slate-500">
+                        &middot; {selectedDriver.vehicle_category}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 break-words text-[10px] text-slate-500">
+                      {selectedDriver.vehicle_number} &middot; ID {selectedDriver.driver_id}
+                    </div>
+                    <div className={`mt-1 font-semibold ${selectedDriver.is_online ? 'text-emerald-700' : 'text-slate-500'}`}>
+                      {selectedDriver.is_online ? 'Online' : 'Offline'}
+                    </div>
                   </div>
                   <button
                     onClick={() => recenterOnDriver(selectedDriver)}
-                    className="p-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-lg text-[10px] flex items-center gap-1 transition cursor-pointer"
+                    className="min-h-9 shrink-0 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-[10px] font-semibold text-slate-700 transition hover:bg-slate-50 cursor-pointer"
                   >
-                    <Compass className="w-3.5 h-3.5" />
-                    <span>Focus</span>
+                    Focus Map
                   </button>
                 </div>
 
-                <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-200/60">
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
                   <a
                     href={`tel:${selectedDriver.mobile_number}`}
-                    className="text-sky-600 font-bold flex items-center gap-1 hover:underline"
+                    className="flex min-h-10 items-center justify-center rounded-lg bg-emerald-600 px-2 py-2 font-semibold text-white transition hover:bg-emerald-700"
                   >
-                    <Phone className="w-3 h-3 text-sky-500" /> {selectedDriver.mobile_number}
+                    Call Driver
                   </a>
-                  <span className="text-slate-500 font-mono text-[10px]">
-                    {selectedDriver.vehicle_number}
-                  </span>
+                  {onOpenAssignModal && activeTrips.length > 0 && selectedDriver.is_online && !selectedDriver.current_trip_id && (
+                    <button
+                      onClick={() => {
+                        const firstOpenTrip = activeTrips.find((t) => t.status === 'OPEN');
+                        if (firstOpenTrip) onOpenAssignModal(firstOpenTrip);
+                      }}
+                      className="col-span-2 flex min-h-10 items-center justify-center rounded-lg bg-amber-500 px-2 py-2 font-bold text-slate-950 transition hover:bg-amber-400 cursor-pointer"
+                    >
+                      Assign Open Trip
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -1617,177 +1779,6 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
         </div>
       </div>
 
-      {/* Map Layers & Display Modal (Mobile & Quick Access) */}
-      {showLayersModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-150">
-          <div className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl shadow-2xl border border-slate-200 overflow-hidden animate-in slide-in-from-bottom duration-200">
-            {/* Modal Header */}
-            <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Layers className="w-5 h-5 text-amber-400" />
-                <h3 className="font-bold text-sm">Map Layers & Radar Display</h3>
-              </div>
-              <button
-                onClick={() => setShowLayersModal(false)}
-                className="w-8 h-8 rounded-lg text-slate-400 hover:text-white flex items-center justify-center cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4 text-xs">
-              {/* Map Theme / Style */}
-              <div>
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-2">
-                  Map Style (Google Maps)
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    onClick={() => setMapTheme('standard')}
-                    className={`py-2.5 px-3 rounded-xl font-bold border transition text-center min-h-[44px] ${
-                      mapTheme === 'standard'
-                        ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
-                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    Standard
-                  </button>
-                  <button
-                    onClick={() => setMapTheme('satellite')}
-                    className={`py-2.5 px-3 rounded-xl font-bold border transition text-center min-h-[44px] ${
-                      mapTheme === 'satellite'
-                        ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
-                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    Satellite
-                  </button>
-                  <button
-                    onClick={() => setMapTheme('dark')}
-                    className={`py-2.5 px-3 rounded-xl font-bold border transition text-center min-h-[44px] ${
-                      mapTheme === 'dark'
-                        ? 'bg-slate-900 text-amber-400 border-slate-900 shadow-xs'
-                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    Night
-                  </button>
-                </div>
-              </div>
-
-              {/* Toggles: Live Traffic & Active Routes */}
-              <div className="space-y-2 pt-2 border-t border-slate-100">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Overlays & Real-Time Traffic
-                </label>
-
-                {/* Live Traffic */}
-                {mapEngine === 'google' && (
-                  <button
-                    onClick={() => setShowTraffic(!showTraffic)}
-                    className={`w-full p-3 rounded-xl border flex items-center justify-between transition min-h-[44px] ${
-                      showTraffic
-                        ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
-                        : 'bg-slate-50 border-slate-200 text-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 font-bold">
-                      <Zap className={`w-4 h-4 ${showTraffic ? 'text-emerald-600' : 'text-slate-400'}`} />
-                      <span>Live Traffic Flow</span>
-                    </div>
-                    <span
-                      className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
-                        showTraffic ? 'bg-emerald-200 text-emerald-800' : 'bg-slate-200 text-slate-600'
-                      }`}
-                    >
-                      {showTraffic ? 'ON' : 'OFF'}
-                    </span>
-                  </button>
-                )}
-
-                {/* Trip Routes */}
-                <button
-                  onClick={() => setShowTripRoutes(!showTripRoutes)}
-                  className={`w-full p-3 rounded-xl border flex items-center justify-between transition min-h-[44px] ${
-                    showTripRoutes
-                      ? 'bg-amber-50 border-amber-300 text-amber-900'
-                      : 'bg-slate-50 border-slate-200 text-slate-700'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 font-bold">
-                    <MapPin className={`w-4 h-4 ${showTripRoutes ? 'text-amber-600' : 'text-slate-400'}`} />
-                    <span>Trip Pickups & Lines ({activeTrips.length})</span>
-                  </div>
-                  <span
-                    className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
-                      showTripRoutes ? 'bg-amber-200 text-amber-900' : 'bg-slate-200 text-slate-600'
-                    }`}
-                  >
-                    {showTripRoutes ? 'ON' : 'OFF'}
-                  </span>
-                </button>
-              </div>
-
-              {/* Geofence Radius */}
-              <div className="pt-2 border-t border-slate-100">
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                    Radial Geofence Display
-                  </label>
-                  <button
-                    onClick={() => setShowRadiusGeofence(!showRadiusGeofence)}
-                    className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
-                      showRadiusGeofence ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-100 text-slate-600'
-                    }`}
-                  >
-                    {showRadiusGeofence ? 'ENABLED' : 'DISABLED'}
-                  </button>
-                </div>
-
-                {showRadiusGeofence && (
-                  <div className="grid grid-cols-5 gap-1.5">
-                    {[5, 10, 15, 25, 50].map((km) => (
-                      <button
-                        key={km}
-                        onClick={() => setRadiusKm(km)}
-                        className={`py-2 rounded-xl font-bold text-center border text-xs min-h-[38px] ${
-                          radiusKm === km
-                            ? 'bg-indigo-600 text-white border-indigo-700'
-                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                        }`}
-                      >
-                        {km}km
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Action: Center on All Fleet */}
-              <div className="pt-2 border-t border-slate-100">
-                <button
-                  onClick={() => {
-                    centerOnAllFleet();
-                    setShowLayersModal(false);
-                  }}
-                  className="w-full py-3 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold flex items-center justify-center gap-1.5 min-h-[44px] cursor-pointer"
-                >
-                  <Compass className="w-4 h-4 text-amber-500" />
-                  <span>Fit All Fleet</span>
-                </button>
-              </div>
-
-              {/* Close Button */}
-              <button
-                onClick={() => setShowLayersModal(false)}
-                className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl min-h-[44px] shadow-xs cursor-pointer"
-              >
-                Apply & Return to Radar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

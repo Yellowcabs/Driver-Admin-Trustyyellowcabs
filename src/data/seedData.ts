@@ -1,13 +1,12 @@
 import { FirestoreDriver, FirestoreTrip, SystemControlSettings, FareRateCard, SystemEventLog } from '../types';
 
 export const DEFAULT_FIREBASE_CONFIG = {
-  projectId: (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID || 'trusty-yellow-cab',
-  appId: (import.meta as any).env?.VITE_FIREBASE_APP_ID || '',
-  apiKey: (import.meta as any).env?.VITE_FIREBASE_API_KEY || '',
-  storageBucket: (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET || 'trusty-yellow-cab.firebasestorage.app',
-  authDomain: (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN || 'trusty-yellow-cab.firebaseapp.com',
-  adminSecret: (import.meta as any).env?.VITE_ADMIN_SECRET || '',
-  isLiveConnected: Boolean((import.meta as any).env?.VITE_FIREBASE_API_KEY),
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'trusty-yellow-cab',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'trusty-yellow-cab.firebasestorage.app',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'trusty-yellow-cab.firebaseapp.com',
+  isLiveConnected: Boolean(import.meta.env.VITE_FIREBASE_API_KEY),
 };
 
 export const INITIAL_SYSTEM_SETTINGS: SystemControlSettings = {

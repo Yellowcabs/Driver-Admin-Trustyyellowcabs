@@ -21,7 +21,7 @@ function removeMeta(html: string, attribute: 'name' | 'property', value: string)
   return html.replace(pattern, '');
 }
 
-const trackingImageVersion = '2';
+const trackingImageVersion = '3';
 
 export default async function handler(req: PreviewRequest, res: PreviewResponse) {
   const requestHost = req.headers?.['x-forwarded-host'] || req.headers?.host || 'admin.trustyyellowcabs.in';
@@ -54,7 +54,7 @@ export default async function handler(req: PreviewRequest, res: PreviewResponse)
     html = replaceOrInsertMeta(html, 'og:type', '<meta property="og:type" content="website" />');
     html = replaceOrInsertMeta(html, 'og:url', `<meta property="og:url" content="${publicUrl}" />`);
 
-    res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.status(200).send(html);
   } catch (error) {

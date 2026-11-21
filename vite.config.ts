@@ -72,7 +72,7 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       aistudioMediaPlugin(),
       VitePWA({
-        registerType: 'prompt',
+        registerType: 'autoUpdate',
         injectRegister: false,
         includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
         manifest: {
@@ -81,7 +81,7 @@ export default defineConfig(({ mode }) => {
           short_name: 'Trusty Admin',
           description: 'PWA dispatch & fleet admin console for Trusty Yellow Cab',
           theme_color: '#ffffff',
-          background_color: '#F8FAFC',
+          background_color: '#FFFFFF',
           display: 'standalone',
           start_url: '/',
           scope: '/',

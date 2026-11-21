@@ -382,7 +382,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
               </span>
             </div>
 
-            <div className="grid w-full grid-cols-3 gap-1.5">
+            <div className="grid w-full grid-cols-2 gap-1.5">
               {/* Quick Create New Ride */}
               <button
                 onClick={onOpenNewTripModal}
@@ -409,7 +409,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
               {onNavigateToTrips && (
                 <button
                   onClick={onNavigateToTrips}
-                  className="w-full bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-700 font-bold text-xs px-2 py-1.5 rounded-xl border border-slate-200/90 flex items-center justify-center gap-1 transition cursor-pointer select-none min-h-[38px] active:scale-95"
+                  className="max-[767px]:hidden w-full bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-700 font-bold text-xs px-2 py-1.5 rounded-xl border border-slate-200/90 flex items-center justify-center gap-1 transition cursor-pointer select-none min-h-[38px] active:scale-95"
                   title="Trip History & Billing"
                 >
                   <History className="w-3.5 h-3.5 text-slate-500" />
@@ -628,7 +628,7 @@ export const DispatchBoard: React.FC<DispatchBoardProps> = ({
             {onNavigateToTrips && (
               <button
                 onClick={onNavigateToTrips}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 transition-all cursor-pointer border border-slate-200/80 select-none active:scale-[0.98]"
+                className="max-[767px]:hidden flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 transition-all cursor-pointer border border-slate-200/80 select-none active:scale-[0.98]"
                 title="View Completed & Closed Trips in Trip History & Billing"
               >
                 <History className="w-3.5 h-3.5 text-slate-500" />

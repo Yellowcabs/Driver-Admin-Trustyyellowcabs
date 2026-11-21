@@ -388,19 +388,6 @@ function AdminApplication({ onSessionEnded }: { onSessionEnded: () => void }) {
     ? trips.find((candidate) => candidate.doc_id === editTripRouteId || candidate.trip_id === editTripRouteId) || null
     : null;
 
-  // Idle prefetching of secondary tabs for instantaneous switching without lag
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    const prefetchTimer = setTimeout(() => {
-      // Prefetch heavy tabs quietly in the background while user is viewing dispatch board
-      import('./components/LiveFleetMap');
-      import('./components/FleetAnalytics');
-      import('./components/DriverManagement');
-      import('./components/TripHistory');
-    }, 1800);
-    return () => clearTimeout(prefetchTimer);
-  }, [isAuthenticated]);
-
   // 0. DEDICATED PRIVACY POLICY & ACCOUNT DELETION PAGES (Google Play compliance & public legal documents)
   // Dedicated, isolated document pages with zero admin options, sidebars, or headers
   if (isPrivacyRoute) {
@@ -706,6 +693,7 @@ function AdminApplication({ onSessionEnded }: { onSessionEnded: () => void }) {
             onSubmit={createTrip}
             drivers={drivers}
             trips={trips}
+            rateCards={rateCards}
             initialBookingData={initialBookingData}
           />
         )}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { FirestoreTrip, FirestoreDriver, VehicleCategory, TripType, DispatchType } from '../../types';
+import { FirestoreTrip, FirestoreDriver, VehicleCategory, TripType, DispatchType, FareRateCard } from '../../types';
 import {
   Car,
   MapPin,
@@ -41,6 +41,7 @@ interface NewTripModalProps {
   onSubmit: (trip: Partial<FirestoreTrip>) => Promise<FirestoreTrip>;
   drivers: FirestoreDriver[];
   trips?: FirestoreTrip[];
+  rateCards?: FareRateCard[];
   initialBookingData?: ParsedBookingData | null;
 }
 
@@ -81,7 +82,8 @@ const CATEGORY_DEFAULT_RATES: Record<
   },
 };
 
-const fareInputValue = (value: number | null) => (value === null ? '' : String(value));
+const fareInputValue = (value: number | null | undefined) =>
+  typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
 
 export const NewTripModal: React.FC<NewTripModalProps> = ({
   isOpen,
@@ -89,6 +91,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
   onSubmit,
   drivers,
   trips = [],
+  rateCards = [],
   initialBookingData,
 }) => {
   const [customerName, setCustomerName] = useState('Walk-in Customer');
@@ -109,6 +112,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
   const [pastedText, setPastedText] = useState('');
   const [pasteNotice, setPasteNotice] = useState<string | null>(null);
   const hasInitializedRef = useRef(false);
+  const hadRateCardsRef = useRef(rateCards.length > 0);
 
   // Pricing inputs - blank by default, fully optional
   const [baseFare, setBaseFare] = useState('');
@@ -412,6 +416,25 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
     handleCategoryChange('MINI');
   }, [isOpen, vehicleCategory, baseFare, kmsFare, hourFare, estimatedFare]);
 
+  // If the form opened before the live tariff snapshot arrived, apply it once
+  // without disturbing an already-entered/manual fare.
+  useEffect(() => {
+    const hadRateCards = hadRateCardsRef.current;
+    hadRateCardsRef.current = rateCards.length > 0;
+    if (
+      !isOpen ||
+      hadRateCards ||
+      rateCards.length === 0 ||
+      estimatedFare ||
+      baseFare ||
+      kmsFare ||
+      hourFare
+    ) {
+      return;
+    }
+    handleCategoryChange(vehicleCategory);
+  }, [isOpen, rateCards, vehicleCategory, baseFare, kmsFare, hourFare, estimatedFare]);
+
   const handleClose = useCallback(() => {
     try {
       localStorage.removeItem(NEW_TRIP_DRAFT_KEY);
@@ -441,9 +464,9 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
 
   function handleCategoryChange(cat: VehicleCategory, selectedTripType: TripType = tripType) {
     setVehicleCategory(cat);
+    const normalizedCategory = String(cat).trim().toUpperCase();
     const defaults =
-      CATEGORY_DEFAULT_RATES[cat] ||
-      CATEGORY_DEFAULT_RATES[String(cat).toUpperCase()] ||
+      CATEGORY_DEFAULT_RATES[normalizedCategory] ||
       CATEGORY_DEFAULT_RATES.MINI;
     const regularDefaults = defaults.regular;
     const rentalDefaults = defaults.rental;
@@ -482,6 +505,8 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
     const total = base + perKm * dist;
     if (total > 0) {
       setEstimatedFare(String(Math.round(total)));
+    } else {
+      setEstimatedFare('');
     }
   };
 
@@ -502,6 +527,8 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
     }
     if (total > 0) {
       setEstimatedFare(String(Math.round(total)));
+    } else {
+      setEstimatedFare('');
     }
   };
 
@@ -617,22 +644,6 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
             </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                setPastedText('');
-                setIsPasteDrawerOpen((prev) => !prev);
-              }}
-              title="Paste booking from Email or WhatsApp"
-              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-bold rounded-xl transition cursor-pointer ${
-                isPasteDrawerOpen
-                  ? 'bg-amber-500 text-slate-950 shadow-xs'
-                  : 'bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-200/80'
-              }`}
-            >
-              <ClipboardPaste className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-              <span className="hidden xs:inline sm:inline">{isPasteDrawerOpen ? 'Close' : 'Paste'}</span>
-            </button>
             <button
               type="button"
               onClick={resetForm}
@@ -903,7 +914,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                     <button
                       type="button"
                       onClick={regenerateOtp}
-                      className="text-[10px] text-amber-700 hover:underline font-bold cursor-pointer"
+                      className="min-h-[44px] shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 transition hover:bg-amber-100 active:bg-amber-200 cursor-pointer"
                     >
                       {otp ? 'New' : 'Generate'}
                     </button>
@@ -979,6 +990,9 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                   if (lat !== undefined && lng !== undefined) {
                     setPickupLat(String(lat));
                     setPickupLng(String(lng));
+                  } else if (!address.trim()) {
+                    setPickupLat('');
+                    setPickupLng('');
                   }
                 }}
                 placeholder="Search pickup address or landmark..."
@@ -1026,6 +1040,9 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                   if (lat !== undefined && lng !== undefined) {
                     setDropLat(String(lat));
                     setDropLng(String(lng));
+                  } else if (!address.trim()) {
+                    setDropLat('');
+                    setDropLng('');
                   }
                 }}
                 placeholder={tripType === 'PACKAGE' ? 'e.g. Coimbatore Local / Return to pickup' : 'Search drop destination...'}
@@ -1485,7 +1502,7 @@ export const NewTripModal: React.FC<NewTripModalProps> = ({
                 </div>
               )}
 
-              <div className="relative z-20 space-y-2">
+              <div className={`space-y-2 ${isDriverSelectionOpen ? '' : 'relative z-20'}`}>
                 {isDriverSelectionOpen ? (
                   <DriverSearchSelect
                     drivers={drivers}

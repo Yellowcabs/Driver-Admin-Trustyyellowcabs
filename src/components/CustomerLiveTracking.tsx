@@ -3,6 +3,14 @@ import { FirestoreTrip, FirestoreDriver, CustomerTrackingSession, FirebaseConnec
 import { subscribeToCustomerTrackingSession } from '../firebase/config';
 import { loadGoogleMaps } from '../services/googleMapsService';
 import { getCarIconDataUrl } from '../utils/carIcon';
+import {
+  calculateGpsBearing,
+  getGpsTimestamp,
+  getRotatedCarIconDataUrl,
+  interpolateBearing,
+  isValidGpsPosition,
+  GpsPosition,
+} from '../utils/movingCarMarker';
 
 interface CustomerLiveTrackingProps {
   token: string;
@@ -76,6 +84,12 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
   const googleCameraListenersAttachedRef = useRef(false);
   const leafletCameraListenersAttachedRef = useRef(false);
   const driverAnimFrameRef = useRef<number | null>(null);
+  const driverMotionRef = useRef<{
+    lastGps?: GpsPosition;
+    bearing: number;
+    gpsTimestamp: number;
+    receivedAt: number;
+  }>({ bearing: 0, gpsTimestamp: 0, receivedAt: 0 });
   const lastTripIdRef = useRef<string | null>(null);
 
   // Reset bounds fit state when trip ID changes
@@ -212,12 +226,13 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
 
       const driverPos =
         driver &&
-        typeof driver.latitude === 'number' &&
-        Number.isFinite(driver.latitude) &&
-        typeof driver.longitude === 'number' &&
-        Number.isFinite(driver.longitude)
+        isValidGpsPosition(driver.latitude, driver.longitude)
           ? { lat: driver.latitude, lng: driver.longitude }
           : null;
+
+      const driverMotion = driverMotionRef.current;
+      const driverGpsTimestamp = driver ? getGpsTimestamp(driver) : 0;
+      const isStaleDriverGps = driverGpsTimestamp > 0 && driverMotion.gpsTimestamp > 0 && driverGpsTimestamp < driverMotion.gpsTimestamp;
 
       // Pure 3D White Car ONLY (no top small icon, no floating badge)
       const carIconDataUrl = getCarIconDataUrl({
@@ -285,7 +300,7 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
           // Driver Car Marker - Pure 3D White Car ONLY (No top icon)
           if (driverPos) {
             const carMarkerIcon = {
-              url: carIconDataUrl,
+              url: getRotatedCarIconDataUrl(carIconDataUrl, driverMotion.bearing),
               scaledSize: new google.maps.Size(60, 40),
               anchor: new google.maps.Point(30, 20),
             };
@@ -297,46 +312,64 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
                 title: driver?.driver_name || 'Your Cab',
                 icon: carMarkerIcon,
               });
+              driverMotion.lastGps = driverPos;
+              driverMotion.gpsTimestamp = driverGpsTimestamp;
+              driverMotion.receivedAt = Date.now();
             } else {
               driverMarkerRef.current.setVisible(true);
-              driverMarkerRef.current.setIcon(carMarkerIcon);
-              // Smoothly glide to new position instead of snapping or jumping
-              const curPos = driverMarkerRef.current.getPosition();
-              if (curPos) {
-                const startLat = curPos.lat();
-                const startLng = curPos.lng();
-                const targetLat = driverPos.lat;
-                const targetLng = driverPos.lng;
-                const delta = Math.hypot(targetLat - startLat, targetLng - startLng);
+              if (!isStaleDriverGps) {
+                const curPos = driverMarkerRef.current.getPosition();
+                const startPosition = curPos
+                  ? { lat: curPos.lat(), lng: curPos.lng() }
+                  : driverPos;
+                const previousGps = driverMotion.lastGps || startPosition;
+                const gpsDelta = Math.hypot(driverPos.lat - previousGps.lat, driverPos.lng - previousGps.lng);
+                const targetBearing = gpsDelta > 0.000005
+                  ? calculateGpsBearing(previousGps, driverPos)
+                  : driverMotion.bearing;
+                const delta = Math.hypot(driverPos.lat - startPosition.lat, driverPos.lng - startPosition.lng);
+                const gap = driverMotion.receivedAt ? Date.now() - driverMotion.receivedAt : 0;
+                driverMotion.lastGps = driverPos;
+                driverMotion.gpsTimestamp = Math.max(driverMotion.gpsTimestamp, driverGpsTimestamp);
+                driverMotion.receivedAt = Date.now();
 
-                if (delta > 0.000005 && delta < 0.05) {
-                  if (driverAnimFrameRef.current) {
-                    cancelAnimationFrame(driverAnimFrameRef.current);
-                  }
+                if (delta > 0.000005 && delta < 0.05 && gap < 120000) {
+                  if (driverAnimFrameRef.current) cancelAnimationFrame(driverAnimFrameRef.current);
                   const startTime = performance.now();
-                  const duration = 30000; // 30 seconds continuous linear movement
+                  const duration = Math.min(5000, Math.max(700, gap > 0 ? gap * 0.9 : 1400));
+                  const startBearing = driverMotion.bearing;
+                  driverMotion.bearing = targetBearing;
                   const step = (now: number) => {
-                    const elapsed = now - startTime;
-                    const progress = Math.min(elapsed / duration, 1);
-                    const ease = progress; // Linear progression for live tracking
+                    const progress = Math.min((now - startTime) / duration, 1);
+                    const bearing = interpolateBearing(startBearing, targetBearing, progress);
                     driverMarkerRef.current?.setPosition({
-                      lat: startLat + (targetLat - startLat) * ease,
-                      lng: startLng + (targetLng - startLng) * ease,
+                      lat: startPosition.lat + (driverPos.lat - startPosition.lat) * progress,
+                      lng: startPosition.lng + (driverPos.lng - startPosition.lng) * progress,
                     });
-                    if (progress < 1) {
-                      driverAnimFrameRef.current = requestAnimationFrame(step);
-                    } else {
-                      driverAnimFrameRef.current = null;
-                    }
+                    driverMarkerRef.current?.setIcon({
+                      url: getRotatedCarIconDataUrl(carIconDataUrl, bearing),
+                      scaledSize: new google.maps.Size(60, 40),
+                      anchor: new google.maps.Point(30, 20),
+                    });
+                    if (progress < 1) driverAnimFrameRef.current = requestAnimationFrame(step);
+                    else driverAnimFrameRef.current = null;
                   };
                   driverAnimFrameRef.current = requestAnimationFrame(step);
-                } else if (delta >= 0.05) {
+                } else {
+                  if (driverAnimFrameRef.current) cancelAnimationFrame(driverAnimFrameRef.current);
+                  driverMotion.bearing = targetBearing;
                   driverMarkerRef.current.setPosition(driverPos);
+                  driverMarkerRef.current.setIcon({
+                    url: getRotatedCarIconDataUrl(carIconDataUrl, driverMotion.bearing),
+                    scaledSize: new google.maps.Size(60, 40),
+                    anchor: new google.maps.Point(30, 20),
+                  });
                 }
               } else {
-                driverMarkerRef.current.setPosition(driverPos);
+                driverMarkerRef.current.setIcon(carMarkerIcon);
               }
             }
+            driverMarkerRef.current.setTitle(driver?.driver_name || 'Your Cab');
           } else if (driverMarkerRef.current) {
             driverMarkerRef.current.setVisible(false);
           }
@@ -454,7 +487,7 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
               filter: drop-shadow(0 4px 8px rgba(0,0,0,0.28));
               cursor: pointer;
             ">
-              <img src="${carIconDataUrl}" style="width: 60px; height: 40px; object-fit: contain; pointer-events: none;" alt="3D White Car" />
+              <img src="${carIconDataUrl}" style="width: 60px; height: 40px; object-fit: contain; pointer-events: none; transform: rotate(${driverMotion.bearing}deg); transform-origin: center;" alt="3D White Car" />
             </div>
           `,
           iconSize: [60, 40],
@@ -463,44 +496,55 @@ export const CustomerLiveTracking: React.FC<CustomerLiveTrackingProps> = ({
 
         if (!leafletDriverMarkerRef.current) {
           leafletDriverMarkerRef.current = L.marker([driverPos.lat, driverPos.lng], { icon: carIcon }).addTo(map);
+          driverMotion.lastGps = driverPos;
+          driverMotion.gpsTimestamp = driverGpsTimestamp;
+          driverMotion.receivedAt = Date.now();
         } else {
           leafletDriverMarkerRef.current.setOpacity(1);
           leafletDriverMarkerRef.current.setIcon(carIcon);
           
-          const curPos = leafletDriverMarkerRef.current.getLatLng();
-          if (curPos) {
-            const startLat = curPos.lat;
-            const startLng = curPos.lng;
-            const targetLat = driverPos.lat;
-            const targetLng = driverPos.lng;
-            const delta = Math.hypot(targetLat - startLat, targetLng - startLng);
+          if (!isStaleDriverGps) {
+            const curPos = leafletDriverMarkerRef.current.getLatLng();
+            const startPosition = curPos
+              ? { lat: curPos.lat, lng: curPos.lng }
+              : driverPos;
+            const previousGps = driverMotion.lastGps || startPosition;
+            const gpsDelta = Math.hypot(driverPos.lat - previousGps.lat, driverPos.lng - previousGps.lng);
+            const targetBearing = gpsDelta > 0.000005
+              ? calculateGpsBearing(previousGps, driverPos)
+              : driverMotion.bearing;
+            const delta = Math.hypot(driverPos.lat - startPosition.lat, driverPos.lng - startPosition.lng);
+            const gap = driverMotion.receivedAt ? Date.now() - driverMotion.receivedAt : 0;
+            driverMotion.lastGps = driverPos;
+            driverMotion.gpsTimestamp = Math.max(driverMotion.gpsTimestamp, driverGpsTimestamp);
+            driverMotion.receivedAt = Date.now();
 
-            if (delta > 0.000005 && delta < 0.05) {
-              if (driverAnimFrameRef.current) {
-                cancelAnimationFrame(driverAnimFrameRef.current);
-              }
+            if (delta > 0.000005 && delta < 0.05 && gap < 120000) {
+              if (driverAnimFrameRef.current) cancelAnimationFrame(driverAnimFrameRef.current);
               const startTime = performance.now();
-              const duration = 30000;
+              const duration = Math.min(5000, Math.max(700, gap > 0 ? gap * 0.9 : 1400));
+              const startBearing = driverMotion.bearing;
+              driverMotion.bearing = targetBearing;
               const step = (now: number) => {
-                const elapsed = now - startTime;
-                const progress = Math.min(elapsed / duration, 1);
-                const ease = progress; // Linear
+                const progress = Math.min((now - startTime) / duration, 1);
+                const bearing = interpolateBearing(startBearing, targetBearing, progress);
                 leafletDriverMarkerRef.current?.setLatLng([
-                  startLat + (targetLat - startLat) * ease,
-                  startLng + (targetLng - startLng) * ease,
+                  startPosition.lat + (driverPos.lat - startPosition.lat) * progress,
+                  startPosition.lng + (driverPos.lng - startPosition.lng) * progress,
                 ]);
-                if (progress < 1) {
-                  driverAnimFrameRef.current = requestAnimationFrame(step);
-                } else {
-                  driverAnimFrameRef.current = null;
-                }
+                const image = leafletDriverMarkerRef.current?.getElement()?.querySelector('img') as HTMLImageElement | null;
+                if (image) image.style.transform = `rotate(${bearing}deg)`;
+                if (progress < 1) driverAnimFrameRef.current = requestAnimationFrame(step);
+                else driverAnimFrameRef.current = null;
               };
               driverAnimFrameRef.current = requestAnimationFrame(step);
-            } else if (delta >= 0.05) {
+            } else {
+              if (driverAnimFrameRef.current) cancelAnimationFrame(driverAnimFrameRef.current);
+              driverMotion.bearing = targetBearing;
               leafletDriverMarkerRef.current.setLatLng([driverPos.lat, driverPos.lng]);
+              const image = leafletDriverMarkerRef.current.getElement()?.querySelector('img') as HTMLImageElement | null;
+              if (image) image.style.transform = `rotate(${driverMotion.bearing}deg)`;
             }
-          } else {
-            leafletDriverMarkerRef.current.setLatLng([driverPos.lat, driverPos.lng]);
           }
         }
         } else if (leafletDriverMarkerRef.current) {

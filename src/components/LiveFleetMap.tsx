@@ -37,6 +37,14 @@ import {
   PlaceSuggestion,
 } from '../services/googleMapsService';
 import { getCarIconDataUrl } from '../utils/carIcon';
+import {
+  calculateGpsBearing,
+  getGpsTimestamp,
+  getRotatedCarIconDataUrl,
+  interpolateBearing,
+  isValidGpsPosition,
+  GpsPosition,
+} from '../utils/movingCarMarker';
 
 interface LiveFleetMapProps {
   drivers: FirestoreDriver[];
@@ -137,6 +145,12 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
   const googleMapContainerRef = useRef<HTMLElement | null>(null);
   const googleMarkersRef = useRef<{ [key: string]: any }>({});
   const markerAnimationsRef = useRef<{ [key: string]: number }>({});
+  const markerMotionRef = useRef<Record<string, {
+    lastGps?: GpsPosition;
+    bearing: number;
+    gpsTimestamp: number;
+    receivedAt: number;
+  }>>({});
   const googleTripMarkersRef = useRef<any[]>([]);
   const googlePolylinesRef = useRef<any[]>([]);
   const googleRadiusCircleRef = useRef<any>(null);
@@ -152,7 +166,7 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
   const [selectedDriver, setSelectedDriver] = useState<FirestoreDriver | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [driverSearchQuery, setDriverSearchQuery] = useState<string>('');
-  const [onlyOnline, setOnlyOnline] = useState<boolean>(false);
+  const [onlyOnline, setOnlyOnline] = useState<boolean>(true);
   const [showTripRoutes, setShowTripRoutes] = useState<boolean>(false);
   const [showTraffic, setShowTraffic] = useState<boolean>(false);
   const [mapTheme, setMapTheme] = useState<'standard' | 'satellite' | 'hybrid' | 'dark'>('standard');
@@ -247,6 +261,7 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
   const cleanupMap = useCallback(() => {
     Object.values(markerAnimationsRef.current).forEach((frameId) => cancelAnimationFrame(frameId));
     markerAnimationsRef.current = {};
+    markerMotionRef.current = {};
     Object.values(googleMarkersRef.current).forEach((marker) => marker?.setMap?.(null));
     googleMarkersRef.current = {};
     googleTripMarkersRef.current.forEach((marker) => marker?.setMap?.(null));
@@ -452,7 +467,7 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
 
     // 1. Remove markers only for drivers who no longer exist or have null coordinates
     const currentDriverIds = new Set(
-      visibleDrivers.filter((d) => d.latitude !== null && d.longitude !== null).map((d) => d.driver_id)
+      visibleDrivers.filter((d) => isValidGpsPosition(d.latitude, d.longitude)).map((d) => d.driver_id)
     );
 
     Object.keys(googleMarkersRef.current).forEach((driverId) => {
@@ -464,6 +479,7 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
         const m = googleMarkersRef.current[driverId];
         if (m && m.setMap) m.setMap(null);
         delete googleMarkersRef.current[driverId];
+        delete markerMotionRef.current[driverId];
       }
     });
 
@@ -496,7 +512,7 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
 
     // 4. Add or Smoothly Update Driver Markers without dropping or jumping
     visibleDrivers.forEach((drv) => {
-      if (drv.latitude === null || drv.longitude === null) return;
+      if (!isValidGpsPosition(drv.latitude, drv.longitude)) return;
 
       const isBusy = Boolean(drv.current_trip_id);
       const markerColor = !drv.is_online
@@ -527,6 +543,15 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
       `;
 
       const existingMarker = googleMarkersRef.current[drv.driver_id];
+      const targetPosition: GpsPosition = { lat: drv.latitude, lng: drv.longitude };
+      const motion = markerMotionRef.current[drv.driver_id] || {
+        bearing: 0,
+        gpsTimestamp: 0,
+        receivedAt: 0,
+      };
+      markerMotionRef.current[drv.driver_id] = motion;
+      const gpsTimestamp = getGpsTimestamp(drv);
+      const isStaleGps = gpsTimestamp > 0 && motion.gpsTimestamp > 0 && gpsTimestamp < motion.gpsTimestamp;
 
       if (existingMarker) {
         // Stop any accidental DROP or BOUNCE animation
@@ -534,50 +559,61 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
           existingMarker.setAnimation(null);
         }
 
-        // Smoothly interpolate position if moved, avoiding sudden snap or jump
-        const curPos = existingMarker.getPosition();
-        if (curPos) {
-          const startLat = curPos.lat();
-          const startLng = curPos.lng();
-          const targetLat = drv.latitude;
-          const targetLng = drv.longitude;
-          const delta = Math.hypot(targetLat - startLat, targetLng - startLng);
+        if (!isStaleGps) {
+          const curPos = existingMarker.getPosition();
+          const startPosition = curPos
+            ? { lat: curPos.lat(), lng: curPos.lng() }
+            : targetPosition;
+          const previousGps = motion.lastGps || startPosition;
+          const gpsDelta = Math.hypot(targetPosition.lat - previousGps.lat, targetPosition.lng - previousGps.lng);
+          const targetBearing = gpsDelta > 0.000005
+            ? calculateGpsBearing(previousGps, targetPosition)
+            : motion.bearing;
+          const delta = Math.hypot(targetPosition.lat - startPosition.lat, targetPosition.lng - startPosition.lng);
+          const gap = motion.receivedAt ? Date.now() - motion.receivedAt : 0;
+          motion.lastGps = targetPosition;
+          motion.gpsTimestamp = Math.max(motion.gpsTimestamp, gpsTimestamp);
+          motion.receivedAt = Date.now();
 
-          if (delta > 0.000005 && delta < 0.05) {
-            if (markerAnimationsRef.current[drv.driver_id]) {
-              cancelAnimationFrame(markerAnimationsRef.current[drv.driver_id]);
-            }
+          if (delta > 0.000005 && delta < 0.05 && gap < 120000) {
+            if (markerAnimationsRef.current[drv.driver_id]) cancelAnimationFrame(markerAnimationsRef.current[drv.driver_id]);
             const startTime = performance.now();
-            const duration = 30000; // 30 seconds smooth linear glide
-
+            const duration = Math.min(5000, Math.max(700, gap > 0 ? gap * 0.9 : 1400));
+            const startBearing = motion.bearing;
+            motion.bearing = targetBearing;
             const step = (now: number) => {
-              const elapsed = now - startTime;
-              const progress = Math.min(elapsed / duration, 1);
-              const ease = progress; // Linear progression
+              const progress = Math.min((now - startTime) / duration, 1);
+              const bearing = interpolateBearing(startBearing, targetBearing, progress);
               existingMarker.setPosition({
-                lat: startLat + (targetLat - startLat) * ease,
-                lng: startLng + (targetLng - startLng) * ease,
+                lat: startPosition.lat + (targetPosition.lat - startPosition.lat) * progress,
+                lng: startPosition.lng + (targetPosition.lng - startPosition.lng) * progress,
               });
-              if (progress < 1) {
-                markerAnimationsRef.current[drv.driver_id] = requestAnimationFrame(step);
-              } else {
-                delete markerAnimationsRef.current[drv.driver_id];
-              }
+              existingMarker.setIcon({
+                url: getRotatedCarIconDataUrl(iconUrl, bearing, 56, 40),
+                scaledSize: new g.maps.Size(56, 40),
+                anchor: new g.maps.Point(28, 20),
+              });
+              if (progress < 1) markerAnimationsRef.current[drv.driver_id] = requestAnimationFrame(step);
+              else delete markerAnimationsRef.current[drv.driver_id];
             };
             markerAnimationsRef.current[drv.driver_id] = requestAnimationFrame(step);
-          } else if (delta >= 0.05) {
-            existingMarker.setPosition({ lat: targetLat, lng: targetLng });
+          } else {
+            if (markerAnimationsRef.current[drv.driver_id]) cancelAnimationFrame(markerAnimationsRef.current[drv.driver_id]);
+            existingMarker.setPosition(targetPosition);
+            motion.bearing = targetBearing;
+            existingMarker.setIcon({
+              url: getRotatedCarIconDataUrl(iconUrl, motion.bearing, 56, 40),
+              scaledSize: new g.maps.Size(56, 40),
+              anchor: new g.maps.Point(28, 20),
+            });
           }
         } else {
-          existingMarker.setPosition({ lat: drv.latitude, lng: drv.longitude });
-        }
-
-        // Update icon and title
-        existingMarker.setIcon({
-          url: iconUrl,
+          existingMarker.setIcon({
+            url: getRotatedCarIconDataUrl(iconUrl, motion.bearing, 56, 40),
           scaledSize: new g.maps.Size(56, 40),
           anchor: new g.maps.Point(28, 20),
-        });
+          });
+        }
         existingMarker.setTitle(title);
 
         // Update click listener with latest info
@@ -604,7 +640,7 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
           map: map,
           title: title,
           icon: {
-            url: iconUrl,
+            url: getRotatedCarIconDataUrl(iconUrl, motion.bearing, 56, 40),
             scaledSize: new g.maps.Size(56, 40),
             anchor: new g.maps.Point(28, 20),
           },
@@ -626,6 +662,9 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
         });
 
         googleMarkersRef.current[drv.driver_id] = marker;
+        motion.lastGps = targetPosition;
+        motion.gpsTimestamp = gpsTimestamp;
+        motion.receivedAt = Date.now();
       }
     });
 
@@ -731,7 +770,7 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
 
       // 1. Remove markers for drivers no longer visible
       const currentDriverIds = new Set(
-        visibleDrivers.filter((d) => d.latitude !== null && d.longitude !== null).map((d) => d.driver_id)
+        visibleDrivers.filter((d) => isValidGpsPosition(d.latitude, d.longitude)).map((d) => d.driver_id)
       );
 
       Object.keys(leafletMarkersRef.current).forEach((driverId) => {
@@ -739,6 +778,7 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
           const m = leafletMarkersRef.current[driverId];
           if (m && m.remove) m.remove();
           delete leafletMarkersRef.current[driverId];
+          delete markerMotionRef.current[driverId];
         }
       });
 
@@ -746,11 +786,20 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
       leafletTripMarkersRef.current = [];
 
       visibleDrivers.forEach((drv) => {
-        if (drv.latitude === null || drv.longitude === null) return;
+        if (!isValidGpsPosition(drv.latitude, drv.longitude)) return;
 
         const isBusy = Boolean(drv.current_trip_id);
         const markerColor = !drv.is_online ? '#64748B' : isBusy ? '#9333EA' : '#10B981';
         const iconUrl = getCarIconUrl(markerColor, drv.is_online, drv.vehicle_category);
+        const targetPosition: GpsPosition = { lat: drv.latitude, lng: drv.longitude };
+        const motion = markerMotionRef.current[drv.driver_id] || {
+          bearing: 0,
+          gpsTimestamp: 0,
+          receivedAt: 0,
+        };
+        markerMotionRef.current[drv.driver_id] = motion;
+        const gpsTimestamp = getGpsTimestamp(drv);
+        const isStaleGps = gpsTimestamp > 0 && motion.gpsTimestamp > 0 && gpsTimestamp < motion.gpsTimestamp;
 
         const customIcon = L.divIcon({
           className: 'custom-driver-pin',
@@ -765,7 +814,7 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
               cursor: pointer;
               filter: drop-shadow(0 4px 8px rgba(0,0,0,0.25));
             ">
-              <img src="${iconUrl}" style="width: 56px; height: 40px; object-fit: contain; pointer-events: none;" alt="Cab" />
+              <img src="${iconUrl}" style="width: 56px; height: 40px; object-fit: contain; pointer-events: none; transform: rotate(${motion.bearing}deg); transform-origin: center;" alt="Cab" />
             </div>
           `,
           iconSize: [56, 40],
@@ -789,40 +838,48 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
           existingMarker.setIcon(customIcon);
           existingMarker.setPopupContent(popupContent);
           
-          const curPos = existingMarker.getLatLng();
-          if (curPos) {
-            const startLat = curPos.lat;
-            const startLng = curPos.lng;
-            const targetLat = drv.latitude;
-            const targetLng = drv.longitude;
-            const delta = Math.hypot(targetLat - startLat, targetLng - startLng);
+          if (!isStaleGps) {
+            const curPos = existingMarker.getLatLng();
+            const startPosition = curPos
+              ? { lat: curPos.lat, lng: curPos.lng }
+              : targetPosition;
+            const previousGps = motion.lastGps || startPosition;
+            const gpsDelta = Math.hypot(targetPosition.lat - previousGps.lat, targetPosition.lng - previousGps.lng);
+            const targetBearing = gpsDelta > 0.000005
+              ? calculateGpsBearing(previousGps, targetPosition)
+              : motion.bearing;
+            const delta = Math.hypot(targetPosition.lat - startPosition.lat, targetPosition.lng - startPosition.lng);
+            const gap = motion.receivedAt ? Date.now() - motion.receivedAt : 0;
+            motion.lastGps = targetPosition;
+            motion.gpsTimestamp = Math.max(motion.gpsTimestamp, gpsTimestamp);
+            motion.receivedAt = Date.now();
 
-            if (delta > 0.000005 && delta < 0.05) {
-              if (markerAnimationsRef.current[drv.driver_id]) {
-                cancelAnimationFrame(markerAnimationsRef.current[drv.driver_id]);
-              }
+            if (delta > 0.000005 && delta < 0.05 && gap < 120000) {
+              if (markerAnimationsRef.current[drv.driver_id]) cancelAnimationFrame(markerAnimationsRef.current[drv.driver_id]);
               const startTime = performance.now();
-              const duration = 30000;
+              const duration = Math.min(5000, Math.max(700, gap > 0 ? gap * 0.9 : 1400));
+              const startBearing = motion.bearing;
+              motion.bearing = targetBearing;
               const step = (now: number) => {
-                const elapsed = now - startTime;
-                const progress = Math.min(elapsed / duration, 1);
-                const ease = progress; // Linear
+                const progress = Math.min((now - startTime) / duration, 1);
+                const bearing = interpolateBearing(startBearing, targetBearing, progress);
                 existingMarker.setLatLng([
-                  startLat + (targetLat - startLat) * ease,
-                  startLng + (targetLng - startLng) * ease,
+                  startPosition.lat + (targetPosition.lat - startPosition.lat) * progress,
+                  startPosition.lng + (targetPosition.lng - startPosition.lng) * progress,
                 ]);
-                if (progress < 1) {
-                  markerAnimationsRef.current[drv.driver_id] = requestAnimationFrame(step);
-                } else {
-                  delete markerAnimationsRef.current[drv.driver_id];
-                }
+                const image = existingMarker.getElement()?.querySelector('img') as HTMLImageElement | null;
+                if (image) image.style.transform = `rotate(${bearing}deg)`;
+                if (progress < 1) markerAnimationsRef.current[drv.driver_id] = requestAnimationFrame(step);
+                else delete markerAnimationsRef.current[drv.driver_id];
               };
               markerAnimationsRef.current[drv.driver_id] = requestAnimationFrame(step);
-            } else if (delta >= 0.05) {
-              existingMarker.setLatLng([targetLat, targetLng]);
+            } else {
+              if (markerAnimationsRef.current[drv.driver_id]) cancelAnimationFrame(markerAnimationsRef.current[drv.driver_id]);
+              existingMarker.setLatLng([targetPosition.lat, targetPosition.lng]);
+              motion.bearing = targetBearing;
+              const image = existingMarker.getElement()?.querySelector('img') as HTMLImageElement | null;
+              if (image) image.style.transform = `rotate(${motion.bearing}deg)`;
             }
-          } else {
-            existingMarker.setLatLng([drv.latitude, drv.longitude]);
           }
         } else {
           const marker = L.marker([drv.latitude, drv.longitude], { icon: customIcon }).addTo(map);
@@ -832,6 +889,9 @@ export const LiveFleetMap: React.FC<LiveFleetMapProps> = ({
             if (onSelectDriver) onSelectDriver(drv);
           });
           leafletMarkersRef.current[drv.driver_id] = marker;
+          motion.lastGps = targetPosition;
+          motion.gpsTimestamp = gpsTimestamp;
+          motion.receivedAt = Date.now();
         }
       });
     });

@@ -1,4 +1,4 @@
-import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
+import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import {
   getFirestore,
   Firestore,
@@ -20,7 +20,7 @@ import {
   runTransaction,
   writeBatch,
 } from 'firebase/firestore';
-import { FirestoreDriver, FirestoreTrip, SystemControlSettings, FirebaseConnectionConfig, DriverStatus, CustomerTrackingSession } from '../types';
+import { FirestoreDriver, FirestoreTrip, SystemControlSettings, FirebaseConnectionConfig, DriverStatus, CustomerTrackingSession, FareRateCard } from '../types';
 import { DEFAULT_FIREBASE_CONFIG } from '../data/seedData';
 
 export enum OperationType {
@@ -346,6 +346,8 @@ function parseFirestoreTripDoc(docSnap: any): FirestoreTrip {
     customer_phone: data.customer_phone || data.customer_mobile || '',
     pickup_location: data.pickup_location || '',
     drop_location: data.drop_location || '',
+    actual_start_location: data.actual_start_location,
+    actual_end_location: data.actual_end_location,
     pickup_lat: typeof data.pickup_lat === 'number' ? data.pickup_lat : null,
     pickup_lng: typeof data.pickup_lng === 'number' ? data.pickup_lng : null,
     drop_lat: typeof data.drop_lat === 'number' ? data.drop_lat : null,
@@ -948,6 +950,39 @@ export async function upsertTripInFirestore(config: FirebaseConnectionConfig, tr
   }
 }
 
+/** Creates a directly assigned trip without exposing an intermediate open trip. */
+export async function createAssignedTripAtomically(
+  config: FirebaseConnectionConfig,
+  trip: FirestoreTrip,
+  driver: FirestoreDriver
+): Promise<void> {
+  const { db } = getOrCreateFirebaseInstance(config);
+  if (!db || !trip.doc_id) throw new Error('Trip database record is unavailable.');
+
+  const tripRef = doc(db, 'trips', trip.doc_id);
+  const driverRef = doc(db, 'drivers', driver.doc_id || driver.driver_id);
+  await runTransaction(db, async (transaction) => {
+    const [tripSnapshot, driverSnapshot] = await Promise.all([
+      transaction.get(tripRef),
+      transaction.get(driverRef),
+    ]);
+    if (tripSnapshot.exists()) throw new Error('Trip was already created.');
+    if (!driverSnapshot.exists()) throw new Error('Driver no longer exists. Refresh and try again.');
+
+    const currentDriver = driverSnapshot.data();
+    const busyTripId = currentDriver.current_trip_id;
+    if (busyTripId && busyTripId !== trip.trip_id && busyTripId !== trip.doc_id) {
+      throw new Error('Driver was assigned to another trip. Refresh and choose another driver.');
+    }
+
+    transaction.set(tripRef, serializeTripForFirestore(trip));
+    transaction.update(driverRef, {
+      current_trip_id: trip.trip_id,
+      updated_at: serverTimestamp(),
+    });
+  });
+}
+
 /** Atomically claims a trip and a driver so two dispatchers cannot assign them concurrently. */
 export async function assignDriverToTripAtomically(
   config: FirebaseConnectionConfig,
@@ -1259,6 +1294,56 @@ export async function disableTrackingSessionInFirestore(
   } catch (err: any) {
     handleFirestoreError(err, OperationType.UPDATE, `tracking_sessions/${token}`);
     return { success: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Streams the authoritative Admin fare cards used by Customer Cloud Functions.
+ * An empty collection is reported as empty and is never auto-seeded.
+ */
+export function subscribeToFirestoreFareRates(
+  config: FirebaseConnectionConfig,
+  onData: (rates: FareRateCard[]) => void,
+  onError: (err: unknown) => void
+): Unsubscribe | null {
+  try {
+    const { db } = getOrCreateFirebaseInstance(config);
+    if (!db) return null;
+    return onSnapshot(
+      collection(db, 'fare_rates'),
+      (snapshot) => {
+        const rates = snapshot.docs
+          .filter((snapshotDoc) => !snapshotDoc.id.startsWith('_'))
+          .map((snapshotDoc) => ({
+            id: snapshotDoc.id,
+            ...snapshotDoc.data(),
+          } as FareRateCard));
+        onData(rates);
+      },
+      onError
+    );
+  } catch (error) {
+    onError(error);
+    return null;
+  }
+}
+
+export async function upsertFareRateInFirestore(
+  config: FirebaseConnectionConfig,
+  rate: FareRateCard
+): Promise<boolean> {
+  try {
+    const { db } = getOrCreateFirebaseInstance(config);
+    if (!db) return false;
+    const { id, ...fields } = rate;
+    await setDoc(doc(db, 'fare_rates', id), {
+      ...fields,
+      updated_at: Date.now(),
+    });
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `fare_rates/${rate.id}`);
+    return false;
   }
 }
 

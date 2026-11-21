@@ -128,10 +128,10 @@ export const EditTripModal: React.FC<EditTripModalProps> = ({
       setTripType(isPkg ? 'PACKAGE' : 'REGULAR');
       setPickupLocation(trip.pickup_location || '');
       setDropLocation(trip.drop_location || '');
-      setPickupLat(String(trip.pickup_lat ?? 11.0168));
-      setPickupLng(String(trip.pickup_lng ?? 76.9558));
-      setDropLat(String(trip.drop_lat ?? 11.0268));
-      setDropLng(String(trip.drop_lng ?? 76.9658));
+      setPickupLat(trip.pickup_lat !== null && trip.pickup_lat !== undefined ? String(trip.pickup_lat) : '');
+      setPickupLng(trip.pickup_lng !== null && trip.pickup_lng !== undefined ? String(trip.pickup_lng) : '');
+      setDropLat(trip.drop_lat !== null && trip.drop_lat !== undefined ? String(trip.drop_lat) : '');
+      setDropLng(trip.drop_lng !== null && trip.drop_lng !== undefined ? String(trip.drop_lng) : '');
       const knownCats = ['MINI', 'Mini', 'SEDAN', 'Sedan', 'SUV', 'SUV+', 'INNOVA', 'Innova', 'INNOVA CRYSTA'];
       const rawCat = trip.vehicle_category || 'MINI';
       if (knownCats.includes(rawCat)) {
@@ -155,7 +155,15 @@ export const EditTripModal: React.FC<EditTripModalProps> = ({
       setPackageHours(trip.package_hours ? String(trip.package_hours) : '');
       setPackageKms(trip.package_kms ? String(trip.package_kms) : '');
 
-      setEstimatedFare(trip.estimated_fare !== undefined && trip.estimated_fare !== null ? String(trip.estimated_fare) : '');
+      setEstimatedFare(
+        trip.status === 'COMPLETED'
+          ? trip.final_fare !== undefined && trip.final_fare !== null
+            ? String(trip.final_fare)
+            : ''
+          : trip.estimated_fare !== undefined && trip.estimated_fare !== null
+            ? String(trip.estimated_fare)
+            : ''
+      );
       setStatus(trip.status as TripStatus);
       setAssignedDriverId(trip.driver_id || '');
       setPendingAssignedDriverId(trip.driver_id || '');
@@ -181,7 +189,7 @@ export const EditTripModal: React.FC<EditTripModalProps> = ({
     setKmsFare(String(defaults.kmsFare));
     setHourFare(String(defaults.hourFare));
 
-    if (tripType === 'REGULAR') {
+    if (tripType === 'REGULAR' && trip.status !== 'COMPLETED') {
       const dist = distanceKm ? Number(distanceKm) : 0;
       const calc = defaults.baseFare + defaults.kmsFare * dist;
       setEstimatedFare(String(Math.max(defaults.baseFare, Math.round(calc))));
@@ -197,6 +205,7 @@ export const EditTripModal: React.FC<EditTripModalProps> = ({
   };
 
   const recalculateRegularFare = (b: string, k: string, d: string) => {
+    if (trip.status === 'COMPLETED') return;
     const base = Number(b) || 0;
     const perKm = Number(k) || 0;
     const dist = d ? Number(d) || 0 : 0;
@@ -211,6 +220,7 @@ export const EditTripModal: React.FC<EditTripModalProps> = ({
     kms: string = packageKms,
     includeKm: boolean = includeKmInPackageTotal
   ) => {
+    if (trip.status === 'COMPLETED') return;
     const rate = Number(hFare) || 0;
     const hrs = Number(hours) || 0;
     const kRate = Number(kFare) || 0;
@@ -238,6 +248,7 @@ export const EditTripModal: React.FC<EditTripModalProps> = ({
   };
 
   const handleRouteCalculated = (distKm: number) => {
+    if (trip.status === 'COMPLETED') return;
     setDistanceKm(String(distKm));
     if (tripType === 'REGULAR') {
       const b = Number(baseFare) || 80;
@@ -305,12 +316,12 @@ export const EditTripModal: React.FC<EditTripModalProps> = ({
         customer_phone: customerPhone.trim() || '',
         trip_type: tripType,
         is_package: isPkg,
-        pickup_location: pickupLocation.trim() || 'Coimbatore',
+        pickup_location: trip.status === 'COMPLETED' ? pickupLocation.trim() : pickupLocation.trim() || 'Coimbatore',
         drop_location: dropLocation.trim() || '',
-        pickup_lat: pickupLat ? Number(pickupLat) : 11.0168,
-        pickup_lng: pickupLng ? Number(pickupLng) : 76.9558,
-        drop_lat: dropLat ? Number(dropLat) : 11.0268,
-        drop_lng: dropLng ? Number(dropLng) : 76.9658,
+        pickup_lat: trip.status === 'COMPLETED' ? (pickupLat ? Number(pickupLat) : null) : (pickupLat ? Number(pickupLat) : 11.0168),
+        pickup_lng: trip.status === 'COMPLETED' ? (pickupLng ? Number(pickupLng) : null) : (pickupLng ? Number(pickupLng) : 76.9558),
+        drop_lat: trip.status === 'COMPLETED' ? (dropLat ? Number(dropLat) : null) : (dropLat ? Number(dropLat) : 11.0268),
+        drop_lng: trip.status === 'COMPLETED' ? (dropLng ? Number(dropLng) : null) : (dropLng ? Number(dropLng) : 76.9658),
         vehicle_category:
           vehicleCategory === 'CUSTOM'
             ? customVehicleName.trim() || 'Custom Vehicle'
@@ -318,11 +329,18 @@ export const EditTripModal: React.FC<EditTripModalProps> = ({
         // In package base dont want
         base_fare: !isPkg ? (baseFare ? Number(baseFare) : null) : null,
         kms_fare: kmsFare ? Number(kmsFare) : null,
-        distance_km: !isPkg && distanceKm ? Number(distanceKm) : (isPkg && packageKms ? Number(packageKms) : undefined),
+        distance_km:
+          trip.status === 'COMPLETED'
+            ? (distanceKm.trim() !== '' ? Number(distanceKm) : undefined)
+            : (!isPkg && distanceKm ? Number(distanceKm) : (isPkg && packageKms ? Number(packageKms) : undefined)),
         hour_fare: isPkg ? (hourFare ? Number(hourFare) : null) : null,
         package_hours: isPkg && packageHours ? Number(packageHours) : undefined,
         package_kms: isPkg && packageKms ? Number(packageKms) : undefined,
-        estimated_fare: estimatedFare ? Number(estimatedFare) : 0,
+        estimated_fare: estimatedFare.trim() !== '' ? Number(estimatedFare) : 0,
+        final_fare:
+          newStatus === 'COMPLETED'
+            ? (estimatedFare.trim() !== '' ? Number(estimatedFare) : null)
+            : trip.final_fare,
         status: newStatus,
         driver_id: finalDriverId,
         driver_name: finalDriverName,
@@ -548,6 +566,9 @@ export const EditTripModal: React.FC<EditTripModalProps> = ({
                 if (lat !== undefined && lng !== undefined) {
                   setPickupLat(String(lat));
                   setPickupLng(String(lng));
+                  } else if (!address.trim()) {
+                    setPickupLat('');
+                    setPickupLng('');
                 }
               }}
               placeholder="Search pickup address..."
@@ -592,6 +613,9 @@ export const EditTripModal: React.FC<EditTripModalProps> = ({
                 if (lat !== undefined && lng !== undefined) {
                   setDropLat(String(lat));
                   setDropLng(String(lng));
+                  } else if (!address.trim()) {
+                    setDropLat('');
+                    setDropLng('');
                 }
               }}
               placeholder={tripType === 'PACKAGE' ? 'e.g. City Tour / Return to pickup' : 'Search drop destination...'}

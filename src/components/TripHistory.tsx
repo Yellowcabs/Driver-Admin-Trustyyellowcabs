@@ -45,6 +45,35 @@ interface TripHistoryProps {
   isFirebaseConnected?: boolean;
 }
 
+const getTripFare = (trip: FirestoreTrip): number =>
+  trip.status === 'COMPLETED' ? trip.final_fare ?? 0 : trip.final_fare ?? trip.estimated_fare ?? 0;
+
+const getTripDistance = (trip: FirestoreTrip): number | null =>
+  trip.distance_km !== undefined && trip.distance_km !== null ? trip.distance_km : null;
+
+const getLocationText = (value: unknown): string => {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number') return String(value);
+  if (!value || typeof value !== 'object') return '';
+
+  const location = value as Record<string, unknown>;
+  for (const key of ['formatted_address', 'address', 'name', 'description', 'text', 'location']) {
+    const text = getLocationText(location[key]);
+    if (text) return text;
+  }
+  return '';
+};
+
+const getTripPickupLocation = (trip: FirestoreTrip): string =>
+  trip.status === 'COMPLETED'
+    ? getLocationText(trip.actual_start_location) || trip.pickup_location
+    : trip.pickup_location;
+
+const getTripDropLocation = (trip: FirestoreTrip): string =>
+  trip.status === 'COMPLETED'
+    ? getLocationText(trip.actual_end_location) || trip.drop_location
+    : trip.drop_location;
+
 type DateFilterPreset = 'ALL' | 'TODAY' | 'WEEK' | 'MONTH' | 'CUSTOM';
 
 const TRIPS_PER_PAGE = 25;
@@ -136,7 +165,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
   
   const totalRevenue = useMemo(() => {
     return completedTrips.reduce(
-      (sum, t) => sum + (t.final_fare || t.estimated_fare || 0),
+      (sum, t) => sum + getTripFare(t),
       0
     );
   }, [completedTrips]);
@@ -214,7 +243,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
           (t.driver_id || '').toLowerCase().includes(q);
         const matchVehicle = (t.vehicle_number || '').toLowerCase().includes(q);
         const matchPickup =
-          t.pickup_location.toLowerCase().includes(q) || t.drop_location.toLowerCase().includes(q);
+          getTripPickupLocation(t).toLowerCase().includes(q) || getTripDropLocation(t).toLowerCase().includes(q);
         if (!matchId && !matchCustomer && !matchDriver && !matchVehicle && !matchPickup) {
           return false;
         }
@@ -441,15 +470,15 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
       new Date(t.created_at).toLocaleString(),
       t.customer_name,
       t.customer_phone,
-      t.pickup_location,
-      t.drop_location,
+      getTripPickupLocation(t),
+      getTripDropLocation(t),
       t.driver_name || 'Unassigned',
       t.driver_id || '',
       t.vehicle_number || '',
       t.vehicle_category || '',
       t.estimated_fare || 0,
-      t.final_fare || t.estimated_fare || 0,
-      t.distance_km || 0,
+      getTripFare(t),
+      getTripDistance(t) ?? '',
       t.otp || '',
       t.completed_at ? new Date(t.completed_at).toLocaleString() : 'N/A',
     ]);
@@ -1051,13 +1080,13 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                     <div className="flex items-start gap-3">
                       <dt className="w-14 shrink-0 pt-0.5 font-medium text-slate-500">Pickup</dt>
                       <dd className="min-w-0 break-words leading-relaxed text-slate-800">
-                        {t.pickup_location}
+                        {getTripPickupLocation(t)}
                       </dd>
                     </div>
                     <div className="flex items-start gap-3">
                       <dt className="w-14 shrink-0 pt-0.5 font-medium text-slate-500">Drop</dt>
                       <dd className="min-w-0 break-words leading-relaxed text-slate-800">
-                        {t.drop_location}
+                        {getTripDropLocation(t)}
                       </dd>
                     </div>
                   </dl>
@@ -1066,7 +1095,13 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                     <div className="flex items-start justify-between gap-3">
                       <dt className="shrink-0 text-slate-500">Fare</dt>
                       <dd className="text-right text-base font-bold text-slate-950 tabular-nums">
-                        ₹{t.final_fare || t.estimated_fare || 0}
+                        ₹{getTripFare(t)}
+                      </dd>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <dt className="shrink-0 text-slate-500">Distance</dt>
+                      <dd className="text-right text-slate-800 tabular-nums">
+                        {getTripDistance(t) !== null ? `${getTripDistance(t)} km` : '—'}
                       </dd>
                     </div>
                     <div className="flex items-start justify-between gap-3">
@@ -1170,11 +1205,11 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                       <div className="space-y-2">
                         <div>
                           <span className="block text-[10px] font-medium text-slate-500">Pickup</span>
-                          <span className="mt-0.5 block break-words leading-relaxed text-slate-800">{t.pickup_location}</span>
+                          <span className="mt-0.5 block break-words leading-relaxed text-slate-800">{getTripPickupLocation(t)}</span>
                         </div>
                         <div>
                           <span className="block text-[10px] font-medium text-slate-500">Drop</span>
-                          <span className="mt-0.5 block break-words leading-relaxed text-slate-600">{t.drop_location}</span>
+                          <span className="mt-0.5 block break-words leading-relaxed text-slate-600">{getTripDropLocation(t)}</span>
                         </div>
                       </div>
                     </td>
@@ -1197,10 +1232,10 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
 
                     <td className="py-3.5 px-4 whitespace-nowrap">
                       <div className="font-black text-slate-950 text-sm font-mono">
-                        ₹{t.final_fare || t.estimated_fare || 0}
+                        ₹{getTripFare(t)}
                       </div>
                       <div className="text-[10px] text-slate-400 font-normal">
-                        {t.distance_km ? `${t.distance_km} km` : 'Fixed'}
+                        {getTripDistance(t) !== null ? `${getTripDistance(t)} km` : 'Fixed'}
                       </div>
                     </td>
 
@@ -1257,7 +1292,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
           <div className="divide-y divide-slate-200 bg-white md:hidden">
             {paginatedTrips.map((t) => {
               const driverForTrip = getDriverForTrip(t);
-              const fare = t.final_fare || t.estimated_fare || 0;
+              const fare = getTripFare(t);
               const createdAt = new Date(t.created_at);
 
               return (
@@ -1293,11 +1328,11 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                   <dl className="mt-3 grid grid-cols-1 gap-2 text-xs">
                     <div>
                       <dt className="font-medium text-slate-500">Pickup</dt>
-                      <dd className="mt-0.5 min-w-0 break-words leading-relaxed text-slate-800">{t.pickup_location}</dd>
+                      <dd className="mt-0.5 min-w-0 break-words leading-relaxed text-slate-800">{getTripPickupLocation(t)}</dd>
                     </div>
                     <div>
                       <dt className="font-medium text-slate-500">Drop</dt>
-                      <dd className="mt-0.5 min-w-0 break-words leading-relaxed text-slate-800">{t.drop_location}</dd>
+                      <dd className="mt-0.5 min-w-0 break-words leading-relaxed text-slate-800">{getTripDropLocation(t)}</dd>
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2">
                       <dt className="text-slate-500">Fare</dt>
@@ -1417,7 +1452,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                 Customer: <strong>{tripToDelete.customer_name}</strong> ({tripToDelete.customer_phone})
               </div>
               <div className="mt-1 break-words text-xs text-slate-500">
-                Route: {tripToDelete.pickup_location} → {tripToDelete.drop_location}
+                Route: {getTripPickupLocation(tripToDelete)} → {getTripDropLocation(tripToDelete)}
               </div>
             </div>
 
@@ -1497,7 +1532,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                 <div className="min-w-0">
                   <span className="block text-slate-500">Fare</span>
                   <span className="mt-0.5 block font-semibold text-slate-900 tabular-nums">
-                    ₹{feeTrip.final_fare || feeTrip.estimated_fare || 0}
+                    ₹{getTripFare(feeTrip)}
                   </span>
                 </div>
                 <div className="min-w-0">

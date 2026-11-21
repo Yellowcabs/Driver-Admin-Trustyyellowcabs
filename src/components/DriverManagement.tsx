@@ -85,7 +85,7 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
   isFirebaseConnected,
   globalSearchQuery,
 }) => {
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [statusFilter, setStatusFilter] = useState<string>('ONLINE');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
   const [searchQuery, setSearchQuery] = useState<string>('');

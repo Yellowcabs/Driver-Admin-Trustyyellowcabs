@@ -102,6 +102,8 @@ export interface FirestoreTrip {
   waiting_seconds?: number;
   start_location?: string;
   end_location?: string;
+  actual_start_location?: unknown;
+  actual_end_location?: unknown;
   // Optional customer live tracking fields (only generated on customer request)
   tracking_token?: string;
   tracking_enabled?: boolean;
@@ -141,6 +143,7 @@ export interface FareRateCard {
   base_distance_km: number;
   per_km_rate: number;
   per_hour_rate: number;
+  package_km_rate?: number;
   kms_fare?: number;
   hour_fare?: number;
   minimum_fare: number;

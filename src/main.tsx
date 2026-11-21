@@ -12,11 +12,10 @@ if (typeof window !== 'undefined') {
 
   if ('serviceWorker' in navigator) {
     if (!isTrackingPage) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker
-          .register('/sw.js')
-          .catch(() => {});
-      });
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then((registration) => registration.update())
+        .catch(() => {});
     }
   }
 }

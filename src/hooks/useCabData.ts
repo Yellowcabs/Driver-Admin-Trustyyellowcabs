@@ -17,10 +17,13 @@ import {
 } from '../data/seedData';
 import {
   getStoredFirebaseConfig,
+  getOrCreateFirebaseInstance,
   saveStoredFirebaseConfig,
   subscribeToFirestoreDrivers,
   subscribeToFirestoreTrips,
   subscribeToFirestoreSystemSettings,
+  subscribeToFirestoreFareRates,
+  upsertFareRateInFirestore,
   upsertDriverInFirestore,
   deleteDriverFromFirestore,
   upsertTripInFirestore,
@@ -28,8 +31,8 @@ import {
   transitionTripAtomically,
   updateTripDetailsAtomically,
   deleteTripFromFirestore,
+  createAssignedTripAtomically,
   updateSystemSettingsInFirestore,
-  testFirebaseConnection,
   createTrackingSessionInFirestore,
   disableTrackingSessionInFirestore,
   cleanAndDeduplicateDriversInFirestore,
@@ -199,13 +202,20 @@ export function useCabData() {
       unsubs = [];
     };
 
-    async function setupLiveSync() {
+    function setupLiveSync() {
       const attempt = ++syncAttempt;
       stopSubscriptions();
       setIsSyncing(true);
-      const test = await testFirebaseConnection(firebaseConfig);
+      const { db } = getOrCreateFirebaseInstance(firebaseConfig);
       if (disposed || attempt !== syncAttempt) return;
-      if (test.success) {
+      if (db) {
+        let initialDriversLoaded = false;
+        let initialTripsLoaded = false;
+        let hasLoggedDriversSync = false;
+        let hasLoggedTripsSync = false;
+        const markInitialSyncComplete = () => {
+          if (initialDriversLoaded && initialTripsLoaded) setIsSyncing(false);
+        };
         setIsFirebaseConnected(true);
         setConnectionStatusText(`Live Firestore: ${firebaseConfig.projectId}`);
         addLog('SUCCESS', 'FIRESTORE', 'Firestore Connected', `Connected to live Firestore project "${firebaseConfig.projectId}".`);
@@ -216,7 +226,12 @@ export function useCabData() {
           (remoteDrivers) => {
             if (remoteDrivers) {
               setDrivers(remoteDrivers);
-              addLog('INFO', 'FIRESTORE', 'Drivers Synced', `Received ${remoteDrivers.length} drivers from Firestore.`);
+              initialDriversLoaded = true;
+              markInitialSyncComplete();
+              if (!hasLoggedDriversSync) {
+                hasLoggedDriversSync = true;
+                addLog('INFO', 'FIRESTORE', 'Drivers Synced', `Received ${remoteDrivers.length} drivers from Firestore.`);
+              }
             }
           },
           (err) => {
@@ -231,7 +246,12 @@ export function useCabData() {
           (remoteTrips) => {
             if (remoteTrips) {
               setTrips(remoteTrips);
-              addLog('INFO', 'FIRESTORE', 'Trips Synced', `Received ${remoteTrips.length} trips from Firestore.`);
+              initialTripsLoaded = true;
+              markInitialSyncComplete();
+              if (!hasLoggedTripsSync) {
+                hasLoggedTripsSync = true;
+                addLog('INFO', 'FIRESTORE', 'Trips Synced', `Received ${remoteTrips.length} trips from Firestore.`);
+              }
             }
           },
           (err) => {
@@ -270,23 +290,38 @@ export function useCabData() {
           }
         );
         if (unsubSettings) unsubs.push(unsubSettings);
+
+        const unsubFareRates = subscribeToFirestoreFareRates(
+          firebaseConfig,
+          (remoteRates) => {
+            if (remoteRates.length > 0) {
+              setRateCards(remoteRates);
+              addLog('INFO', 'FIRESTORE', 'Fare Rates Synced', `Received ${remoteRates.length} fare rates from Firestore.`);
+            } else {
+              addLog(
+                'WARNING',
+                'FIRESTORE',
+                'Fare Rates Missing',
+                'Firestore fare_rates is empty. Customer fare estimates remain disabled until Admin rates are saved.'
+              );
+            }
+          },
+          (err) => console.warn('Fare-rate sync notice:', err)
+        );
+        if (unsubFareRates) unsubs.push(unsubFareRates);
       } else {
         setIsFirebaseConnected(false);
         setConnectionStatusText(
-          test.isUnavailable
-            ? `Local Offline Mode (Ready for Firestore: ${firebaseConfig.projectId})`
-            : `Local Console Mode (Ready for Firestore: ${firebaseConfig.projectId})`
+          `Local Offline Mode (Ready for Firestore: ${firebaseConfig.projectId})`
         );
         addLog(
           'INFO',
           'ADMIN',
-          test.isUnavailable ? 'Offline Local Console Mode' : 'Local Mode Active',
-          test.isUnavailable
-            ? 'Firestore backend is currently unreachable. Waiting for live backend data.'
-            : 'Live Firestore data is unavailable.'
+          'Offline Local Console Mode',
+          'Firestore backend is currently unreachable. Waiting for live backend data.'
         );
       }
-      setIsSyncing(false);
+      if (!db) setIsSyncing(false);
     }
 
     setupLiveSync();
@@ -408,18 +443,7 @@ export function useCabData() {
         if (newTrip.driver_id) {
           const assignedDriver = driversRef.current.find((driver) => driver.driver_id === newTrip.driver_id);
           if (!assignedDriver) throw new Error('Assigned driver is no longer available.');
-          const openTrip: FirestoreTrip = {
-            ...newTrip,
-            status: 'OPEN',
-            driver_id: null,
-            driver_name: null,
-            driver_phone: null,
-            vehicle_number: null,
-            accepted_at: null,
-          };
-          const created = await upsertTripInFirestore(firebaseConfig, openTrip);
-          if (!created) throw new Error('Trip could not be created in Firestore.');
-          await assignDriverToTripAtomically(firebaseConfig, newTrip, assignedDriver);
+          await createAssignedTripAtomically(firebaseConfig, newTrip, assignedDriver);
         } else {
           const created = await upsertTripInFirestore(firebaseConfig, newTrip);
           if (!created) throw new Error('Trip could not be created in Firestore.');
@@ -1181,10 +1205,25 @@ export function useCabData() {
   // FARE RATE CARDS
   // -------------------------------------------------------------
 
-  const updateRateCard = useCallback((updatedCard: FareRateCard) => {
-    setRateCards((prev) => prev.map((rc) => (rc.id === updatedCard.id ? updatedCard : rc)));
-    addLog('INFO', 'ADMIN', 'Rate Card Updated', `Updated pricing rules for ${updatedCard.name} (${updatedCard.category}).`);
-  }, [addLog]);
+  const updateRateCard = useCallback(async (updatedCard: FareRateCard) => {
+    if (!isFirebaseConnected) {
+      throw new Error('Connect the Admin Panel to Firestore before saving fare rates.');
+    }
+    const saved = await upsertFareRateInFirestore(firebaseConfig, updatedCard);
+    if (!saved) throw new Error('Fare rate could not be saved to Firestore.');
+    setRateCards((prev) => {
+      const exists = prev.some((rate) => rate.id === updatedCard.id);
+      return exists
+        ? prev.map((rate) => (rate.id === updatedCard.id ? updatedCard : rate))
+        : [...prev, updatedCard];
+    });
+    addLog(
+      'SUCCESS',
+      'ADMIN',
+      'Rate Card Updated',
+      `Saved pricing rules for ${updatedCard.name} (${updatedCard.category}) to fare_rates/${updatedCard.id}.`
+    );
+  }, [isFirebaseConnected, firebaseConfig, addLog]);
 
   // -------------------------------------------------------------
   // FIREBASE CONFIG UPDATER

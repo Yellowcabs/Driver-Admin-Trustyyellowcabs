@@ -377,28 +377,31 @@ export const DriverSearchSelect: React.FC<DriverSearchSelectProps> = ({
     return (
       <div
         ref={selectionPageScrollRef}
-        className="fixed inset-x-0 bottom-0 top-14 z-[70] overflow-y-auto bg-slate-50 sm:top-16 lg:top-0"
+        className="fixed inset-0 z-[100] h-[100dvh] overflow-y-auto overscroll-contain bg-slate-50"
       >
         <div className="min-h-full w-full">
-          <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-6">
+          <div
+            className="sticky top-0 z-10 flex min-h-16 items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 py-3 shadow-sm sm:px-6"
+            style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
+          >
             <div className="min-w-0">
-              <h2 className="text-base font-bold text-slate-900 sm:text-lg">
+              <h2 className="truncate text-base font-bold text-slate-900 sm:text-lg">
                 {cleanEditLayout ? 'Select Driver' : 'Select Nearby Driver'}
               </h2>
-              <p className="text-xs text-slate-500">
+              <p className="truncate text-xs text-slate-500">
                 {nearbyRadiusCount} available drivers · {radiusLimit} km radius
               </p>
             </div>
             <button
               type="button"
               onClick={onBack}
-              className="min-h-[44px] rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+              className="min-h-[44px] shrink-0 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
             >
               Back
             </button>
           </div>
 
-          <div className="mx-auto w-full max-w-4xl space-y-4 px-4 py-4 pb-28 sm:px-6 sm:py-6 min-[768px]:max-[1024px]:max-w-3xl min-[768px]:max-[1024px]:pb-24">
+          <div className="mx-auto w-full max-w-4xl space-y-4 px-3 py-4 pb-[calc(7rem+env(safe-area-inset-bottom))] sm:px-6 sm:py-6 min-[768px]:max-[1024px]:max-w-3xl min-[768px]:max-[1024px]:pb-24">
             <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
               <div className="flex gap-2">
                 <input
@@ -422,7 +425,7 @@ export const DriverSearchSelect: React.FC<DriverSearchSelectProps> = ({
                 <button
                   type="button"
                   onClick={() => setSelectionFilter('ONLINE')}
-                  className={`min-h-[44px] rounded-xl border px-3 text-sm font-bold transition ${
+                  className={`min-h-[44px] rounded-xl border px-2 text-xs font-bold leading-tight transition sm:px-3 sm:text-sm ${
                     selectionFilter === 'ONLINE'
                       ? 'border-amber-500 bg-amber-50 text-amber-900'
                       : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
@@ -433,7 +436,7 @@ export const DriverSearchSelect: React.FC<DriverSearchSelectProps> = ({
                 <button
                   type="button"
                   onClick={() => setSelectionFilter('ALL')}
-                  className={`min-h-[44px] rounded-xl border px-3 text-sm font-bold transition ${
+                  className={`min-h-[44px] rounded-xl border px-2 text-xs font-bold leading-tight transition sm:px-3 sm:text-sm ${
                     selectionFilter === 'ALL'
                       ? 'border-amber-500 bg-amber-50 text-amber-900'
                       : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
@@ -593,15 +596,22 @@ export const DriverSearchSelect: React.FC<DriverSearchSelectProps> = ({
             )}
           </div>
 
-          <div className="fixed inset-x-0 bottom-0 z-10 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:px-6">
-            <div className="mx-auto flex w-full max-w-4xl justify-end">
+          <div className="fixed inset-x-0 bottom-0 z-10 border-t border-slate-200 bg-white/95 px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur sm:px-6">
+            <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-3">
+              <div className="min-w-0 flex-1 truncate text-xs text-slate-600">
+                {selectedDriverForPage ? (
+                  <><span className="font-semibold text-slate-900">Selected:</span> {selectedDriverForPage.driver_name}</>
+                ) : (
+                  'Select a driver to assign this trip'
+                )}
+              </div>
               <button
                 type="button"
                 disabled={!selectedDriverId || !selectedDriverIsEligible}
                 onClick={onConfirm}
-                className="min-h-[44px] w-full rounded-xl bg-amber-500 px-6 text-sm font-bold text-slate-950 shadow-sm transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+                className="min-h-[44px] shrink-0 rounded-xl bg-amber-500 px-4 text-sm font-bold text-slate-950 shadow-sm transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50 sm:px-6"
               >
-                Confirm Driver
+                Assign Driver
               </button>
             </div>
           </div>

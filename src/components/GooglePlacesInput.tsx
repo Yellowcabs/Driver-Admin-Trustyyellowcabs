@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { MapPin, X, Loader2, Check } from 'lucide-react';
 import {
   fetchPlaceSuggestions,
@@ -38,6 +39,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const activeRequestIdRef = useRef<number>(0);
   const userTypingRef = useRef(false);
@@ -45,6 +47,108 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
 
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const skipSearchForValueRef = useRef<string | null>(null);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [mobileMenuStyle, setMobileMenuStyle] = useState<React.CSSProperties>({});
+  const mobileInputRef = useRef<HTMLInputElement>(null);
+  const mobileSearchRef = useRef<HTMLDivElement>(null);
+  const mobilePreviousValueRef = useRef(value);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 767px)');
+    const updateViewportMode = () => setIsMobileViewport(mediaQuery.matches);
+    updateViewportMode();
+    mediaQuery.addEventListener?.('change', updateViewportMode);
+    return () => mediaQuery.removeEventListener?.('change', updateViewportMode);
+  }, []);
+
+  const updateMobileMenuPosition = () => {
+    if (!isMobileViewport || !inputRef.current) return;
+    const inputRect = inputRef.current.getBoundingClientRect();
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const top = Math.max(8, inputRect.bottom + 4);
+    setMobileMenuStyle({
+      top,
+      left: Math.max(8, inputRect.left),
+      width: Math.min(inputRect.width, window.innerWidth - Math.max(8, inputRect.left) - 8),
+      maxHeight: Math.max(120, viewportHeight - top - 8),
+    });
+  };
+
+  const openMobileSearch = () => {
+    if (!isMobileViewport) {
+      inputRef.current?.focus();
+      return;
+    }
+    mobilePreviousValueRef.current = value;
+    userTypingRef.current = false;
+    activeRequestIdRef.current += 1;
+    skipSearchForValueRef.current = null;
+    setInputValue(value);
+    setSuggestions([]);
+    setIsOpen(false);
+    setIsFocused(true);
+    setMobileSearchOpen(true);
+  };
+
+  const closeMobileSearch = () => {
+    userTypingRef.current = false;
+    activeRequestIdRef.current += 1;
+    skipSearchForValueRef.current = null;
+    setInputValue(mobilePreviousValueRef.current);
+    setSuggestions([]);
+    setIsOpen(false);
+    setIsLoading(false);
+    setMobileSearchOpen(false);
+    setIsFocused(false);
+  };
+
+  const clearInput = (refocusMobileInput = false) => {
+    userTypingRef.current = false;
+    activeRequestIdRef.current += 1;
+    skipSearchForValueRef.current = null;
+    lastUserValueRef.current = null;
+    setInputValue('');
+    setSuggestions([]);
+    setIsOpen(false);
+    setIsLoading(false);
+    onChange('', undefined, undefined);
+    if (refocusMobileInput) {
+      window.requestAnimationFrame(() => mobileInputRef.current?.focus());
+    } else {
+      inputRef.current?.focus();
+    }
+  };
+
+  useEffect(() => {
+    if (!mobileSearchOpen) return;
+    const frame = window.requestAnimationFrame(() => mobileInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [mobileSearchOpen]);
+
+  useEffect(() => {
+    if (!isMobileViewport || !isOpen) return;
+
+    // Keep the focused field in the visible part of the modal when the native
+    // keyboard opens, then position the menu against the updated input rect.
+    inputRef.current?.scrollIntoView({ block: 'center', inline: 'nearest' });
+    const frame = window.requestAnimationFrame(() => {
+      updateMobileMenuPosition();
+      window.requestAnimationFrame(updateMobileMenuPosition);
+    });
+    const visualViewport = window.visualViewport;
+    visualViewport?.addEventListener('resize', updateMobileMenuPosition);
+    visualViewport?.addEventListener('scroll', updateMobileMenuPosition);
+    window.addEventListener('resize', updateMobileMenuPosition);
+    window.addEventListener('scroll', updateMobileMenuPosition, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      visualViewport?.removeEventListener('resize', updateMobileMenuPosition);
+      visualViewport?.removeEventListener('scroll', updateMobileMenuPosition);
+      window.removeEventListener('resize', updateMobileMenuPosition);
+      window.removeEventListener('scroll', updateMobileMenuPosition, true);
+    };
+  }, [isMobileViewport, isOpen]);
 
   useEffect(() => {
     if (value === lastUserValueRef.current) {
@@ -142,7 +246,12 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
   // Close suggestions on outside click or touch
   useEffect(() => {
     function handleClickOutside(event: MouseEvent | TouchEvent) {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+      if (
+        wrapperRef.current &&
+        !wrapperRef.current.contains(event.target as Node) &&
+        !menuRef.current?.contains(event.target as Node) &&
+        !mobileSearchRef.current?.contains(event.target as Node)
+      ) {
         userTypingRef.current = false;
         activeRequestIdRef.current += 1;
         setSuggestions([]);
@@ -167,6 +276,8 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
     setSuggestions([]);
     setIsOpen(false);
     setIsLoading(false);
+    setMobileSearchOpen(false);
+    setIsFocused(false);
 
     // If suggestion already contains lat/lng (e.g. Photon or Local DB or OSM)
     if (suggestion.lat !== undefined && suggestion.lng !== undefined) {
@@ -195,6 +306,10 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
     userTypingRef.current = false;
     activeRequestIdRef.current += 1;
     setIsOpen(false);
+    if (isMobileViewport) {
+      setMobileSearchOpen(false);
+      setIsFocused(false);
+    }
     const text = inputValue;
     if (!text || !text.trim()) return;
     skipSearchForValueRef.current = text;
@@ -228,7 +343,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
       : 'text-blue-600';
 
   return (
-    <div ref={wrapperRef} className={`relative space-y-1.5 ${className}`}>
+    <div ref={wrapperRef} className={`relative space-y-1.5 ${isOpen ? 'max-[767px]:z-[100]' : ''} ${className}`}>
       {/* Label */}
       <div className="flex items-center justify-between">
         <label
@@ -242,7 +357,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
 
       {/* Input container */}
       <div
-        onClick={() => inputRef.current?.focus()}
+        onClick={openMobileSearch}
         className={`relative flex items-center bg-white border rounded-xl transition shadow-2xs cursor-text ${
           isFocused ? 'border-amber-500 ring-2 ring-amber-500/20' : 'border-slate-200 hover:border-slate-300'
         }`}
@@ -255,6 +370,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
           ref={inputRef}
           type="text"
           value={inputValue}
+          readOnly={isMobileViewport}
           onChange={(e) => {
             const nextVal = e.target.value;
             skipSearchForValueRef.current = null;
@@ -267,9 +383,11 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
             }
             setIsFocused(true);
             setInputValue(nextVal);
-            onChange(nextVal);
+            if (!isMobileViewport) onChange(nextVal);
           }}
-          onBlur={handleManualCommit}
+          onBlur={() => {
+            if (!isMobileViewport) handleManualCommit();
+          }}
           onKeyDown={(e) => {
             if (e.key === 'ArrowDown') {
               e.preventDefault();
@@ -297,6 +415,10 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
             }
           }}
           onFocus={() => {
+            if (isMobileViewport && !mobileSearchOpen) {
+              openMobileSearch();
+              return;
+            }
             setIsFocused(true);
             if (suggestionGroup) {
               window.dispatchEvent(new CustomEvent('google-places-focus', {
@@ -319,23 +441,10 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
               type="button"
               onMouseDown={(e) => {
                 e.preventDefault();
-                userTypingRef.current = false;
-                activeRequestIdRef.current += 1;
-                setInputValue('');
-                onChange('', undefined, undefined);
-                setSuggestions([]);
-                setIsOpen(false);
-                inputRef.current?.focus();
+                clearInput();
               }}
-              onClick={() => {
-                userTypingRef.current = false;
-                activeRequestIdRef.current += 1;
-                setInputValue('');
-                onChange('', undefined, undefined);
-                setSuggestions([]);
-                setIsOpen(false);
-                inputRef.current?.focus();
-              }}
+              onClick={() => clearInput()}
+              aria-label={`Clear ${label}`}
               className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
@@ -345,8 +454,15 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
       </div>
 
       {/* Autocomplete Dropdown Menu - Taxi booking app style */}
-      {isOpen && suggestions.length > 0 && (
-        <div className="absolute left-0 right-0 top-full mt-1 bg-white rounded-xl shadow-xl border border-slate-200 z-50 overflow-hidden divide-y divide-slate-100 animate-in fade-in slide-in-from-top-1 duration-150 max-h-72 overflow-y-auto">
+      {!mobileSearchOpen && isOpen && suggestions.length > 0 && (() => {
+        const suggestionMenu = (
+        <div
+          ref={menuRef}
+          style={isMobileViewport ? mobileMenuStyle : undefined}
+          className={isMobileViewport
+            ? 'fixed bg-white rounded-xl shadow-2xl border border-slate-200 z-[1000] overflow-hidden divide-y divide-slate-100 animate-in fade-in slide-in-from-top-1 duration-150 overflow-y-auto overscroll-contain'
+            : 'absolute left-0 right-0 top-full mt-1 bg-white rounded-xl shadow-xl border border-slate-200 z-50 overflow-hidden divide-y divide-slate-100 animate-in fade-in slide-in-from-top-1 duration-150 max-h-72 overflow-y-auto'}
+        >
           {/* Header with dismiss button */}
           <div className="px-3 py-1.5 bg-slate-50 flex items-center justify-between text-[11px] font-semibold text-slate-500 border-b border-slate-100">
             <div className="flex items-center gap-1.5">
@@ -382,7 +498,7 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
                 handleSelectSuggestion(suggestion);
               }}
               onClick={() => handleSelectSuggestion(suggestion)}
-              className={`w-full px-3.5 py-2.5 text-left transition flex items-center gap-3 cursor-pointer text-xs group ${
+              className={`w-full px-3.5 py-2.5 max-[767px]:min-h-12 text-left transition flex items-center gap-3 cursor-pointer text-xs group ${
                 selectedIndex === idx
                   ? 'bg-amber-50 text-slate-950 font-semibold'
                   : 'hover:bg-slate-50 text-slate-800'
@@ -433,6 +549,100 @@ export const GooglePlacesInput: React.FC<GooglePlacesInputProps> = ({
             </button>
           )}
         </div>
+        );
+        return isMobileViewport ? createPortal(suggestionMenu, document.body) : suggestionMenu;
+      })()}
+
+      {mobileSearchOpen && createPortal(
+        <div
+          ref={mobileSearchRef}
+          className="fixed inset-0 z-[1100] flex h-[100dvh] min-h-0 flex-col bg-white text-slate-900"
+          style={{ paddingTop: 'env(safe-area-inset-top)' }}
+        >
+          <header className="flex shrink-0 items-center gap-3 border-b border-slate-200 px-4 py-3">
+            <button
+              type="button"
+              onClick={closeMobileSearch}
+              className="min-h-11 min-w-11 rounded-lg px-2 text-left text-sm font-semibold text-slate-700 active:bg-slate-100"
+            >
+              Back
+            </button>
+            <h1 className="text-base font-semibold text-slate-900">{label}</h1>
+          </header>
+
+          <div className="shrink-0 px-4 py-3">
+            <div className="relative">
+              <input
+                ref={mobileInputRef}
+                type="text"
+                value={inputValue}
+                onChange={(e) => {
+                  const nextVal = e.target.value;
+                  skipSearchForValueRef.current = null;
+                  userTypingRef.current = true;
+                  setIsFocused(true);
+                  setInputValue(nextVal);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && isOpen && selectedIndex >= 0 && selectedIndex < suggestions.length) {
+                    e.preventDefault();
+                    handleSelectSuggestion(suggestions[selectedIndex]);
+                  }
+                }}
+                placeholder={placeholder}
+                className="min-h-12 w-full rounded-xl border border-slate-300 bg-white px-3 pr-12 text-base font-medium text-slate-900 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
+                autoFocus
+              />
+              {inputValue && (
+                <button
+                  type="button"
+                  aria-label={`Clear ${label}`}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => clearInput(true)}
+                  className="absolute right-2 top-1/2 flex min-h-10 min-w-10 -translate-y-1/2 items-center justify-center rounded-lg text-slate-500 active:bg-slate-100"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain border-t border-slate-100 pb-[env(safe-area-inset-bottom)]">
+            {isLoading && (
+              <p className="px-4 py-4 text-sm text-slate-500">Searching...</p>
+            )}
+            {!isLoading && suggestions.length > 0 && (
+              <div className="divide-y divide-slate-100">
+                {suggestions.map((suggestion, idx) => (
+                  <button
+                    key={suggestion.placeId}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => handleSelectSuggestion(suggestion)}
+                    className={`flex min-h-14 w-full items-start px-4 py-3 text-left active:bg-slate-100 ${
+                      selectedIndex === idx ? 'bg-slate-50' : 'bg-white'
+                    }`}
+                  >
+                    <span className="min-w-0">
+                      <span className="block text-sm font-semibold leading-snug text-slate-900">{suggestion.mainText}</span>
+                      {suggestion.secondaryText && (
+                        <span className="mt-0.5 block text-xs leading-snug text-slate-500">{suggestion.secondaryText}</span>
+                      )}
+                    </span>
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={handleManualCommit}
+                  className="min-h-12 w-full bg-slate-50 px-4 py-3 text-left text-sm font-medium text-slate-700 active:bg-slate-100"
+                >
+                  Use typed location: <span className="font-semibold text-slate-900">{inputValue}</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

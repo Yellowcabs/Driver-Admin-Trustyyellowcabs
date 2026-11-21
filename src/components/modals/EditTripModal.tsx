@@ -58,6 +58,19 @@ const CATEGORY_DEFAULT_RATES: Record<
   CUSTOM: { baseFare: 300, kmsFare: 45, hourFare: 500 },
 };
 
+const getLocationText = (value: unknown): string => {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number') return String(value);
+  if (!value || typeof value !== 'object') return '';
+
+  const location = value as Record<string, unknown>;
+  for (const key of ['formatted_address', 'address', 'name', 'description', 'text', 'location']) {
+    const text = getLocationText(location[key]);
+    if (text) return text;
+  }
+  return '';
+};
+
 export const EditTripModal: React.FC<EditTripModalProps> = ({
   isOpen,
   presentation = 'modal',
@@ -111,6 +124,9 @@ export const EditTripModal: React.FC<EditTripModalProps> = ({
   const saveInFlightRef = useRef(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState(1);
+  const initializedTripKeyRef = useRef<string | null>(null);
+  const initialActualPickupRef = useRef('');
+  const initialActualDropRef = useRef('');
 
   const editSteps = [
     'Trip & Passenger',
@@ -122,12 +138,22 @@ export const EditTripModal: React.FC<EditTripModalProps> = ({
 
   useEffect(() => {
     if (trip) {
+      const tripKey = trip.doc_id || trip.trip_id;
+      if (initializedTripKeyRef.current === tripKey) return;
+      initializedTripKeyRef.current = tripKey;
+
+      const isCompleted = trip.status === 'COMPLETED';
+      const actualPickup = isCompleted ? getLocationText(trip.actual_start_location) : '';
+      const actualDrop = isCompleted ? getLocationText(trip.actual_end_location) : '';
+      initialActualPickupRef.current = actualPickup;
+      initialActualDropRef.current = actualDrop;
+
       setCustomerName(trip.customer_name || '');
       setCustomerPhone(trip.customer_phone || '');
       const isPkg = Boolean(trip.is_package || trip.trip_type === 'PACKAGE');
       setTripType(isPkg ? 'PACKAGE' : 'REGULAR');
-      setPickupLocation(trip.pickup_location || '');
-      setDropLocation(trip.drop_location || '');
+      setPickupLocation(actualPickup || trip.pickup_location || '');
+      setDropLocation(actualDrop || trip.drop_location || '');
       setPickupLat(trip.pickup_lat !== null && trip.pickup_lat !== undefined ? String(trip.pickup_lat) : '');
       setPickupLng(trip.pickup_lng !== null && trip.pickup_lng !== undefined ? String(trip.pickup_lng) : '');
       setDropLat(trip.drop_lat !== null && trip.drop_lat !== undefined ? String(trip.drop_lat) : '');
@@ -322,6 +348,12 @@ export const EditTripModal: React.FC<EditTripModalProps> = ({
         pickup_lng: trip.status === 'COMPLETED' ? (pickupLng ? Number(pickupLng) : null) : (pickupLng ? Number(pickupLng) : 76.9558),
         drop_lat: trip.status === 'COMPLETED' ? (dropLat ? Number(dropLat) : null) : (dropLat ? Number(dropLat) : 11.0268),
         drop_lng: trip.status === 'COMPLETED' ? (dropLng ? Number(dropLng) : null) : (dropLng ? Number(dropLng) : 76.9658),
+        ...(trip.status === 'COMPLETED' && initialActualPickupRef.current && pickupLocation.trim() !== initialActualPickupRef.current
+          ? { actual_start_location: pickupLocation.trim() || null }
+          : {}),
+        ...(trip.status === 'COMPLETED' && initialActualDropRef.current && dropLocation.trim() !== initialActualDropRef.current
+          ? { actual_end_location: dropLocation.trim() || null }
+          : {}),
         vehicle_category:
           vehicleCategory === 'CUSTOM'
             ? customVehicleName.trim() || 'Custom Vehicle'

@@ -928,6 +928,8 @@ function serializeTripForFirestore(trip: FirestoreTrip): Record<string, unknown>
   if (trip.distance_km !== undefined) tripMap.distance_km = trip.distance_km;
   if (trip.duration_seconds !== undefined) tripMap.duration_seconds = trip.duration_seconds;
   if (trip.waiting_seconds !== undefined) tripMap.waiting_seconds = trip.waiting_seconds;
+  if (trip.actual_start_location !== undefined) tripMap.actual_start_location = trip.actual_start_location;
+  if (trip.actual_end_location !== undefined) tripMap.actual_end_location = trip.actual_end_location;
   if (trip.tracking_token !== undefined) tripMap.tracking_token = trip.tracking_token;
   if (trip.tracking_enabled !== undefined) tripMap.tracking_enabled = trip.tracking_enabled;
   if (trip.tracking_created_at !== undefined) tripMap.tracking_created_at = trip.tracking_created_at;

@@ -354,6 +354,7 @@ function AdminApplication({ onSessionEnded }: { onSessionEnded: () => void }) {
     generateCustomerTrackingLink,
     disableCustomerTrackingLink,
     registerDriver,
+    generateDriverId,
     updateDriver,
     toggleDriverStatus,
     resetDriverDeviceBinding,
@@ -549,6 +550,7 @@ function AdminApplication({ onSessionEnded }: { onSessionEnded: () => void }) {
                 isOpen
                 onClose={() => setIsNewDriverModalOpen(false)}
                 onSubmit={registerDriver}
+                onGenerateDriverId={generateDriverId}
               />
             </Suspense>
           ) : editTripRouteId ? (

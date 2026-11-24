@@ -20,6 +20,8 @@ import {
   getOrCreateFirebaseInstance,
   saveStoredFirebaseConfig,
   subscribeToFirestoreDrivers,
+  generateAvailableDriverId,
+  createDriverInFirestore,
   subscribeToFirestoreTrips,
   subscribeToFirestoreSystemSettings,
   subscribeToFirestoreFareRates,
@@ -895,17 +897,8 @@ export function useCabData() {
 
   const registerDriver = useCallback(
     async (driverData: Partial<FirestoreDriver>): Promise<FirestoreDriver> => {
-      // 1. Resolve Driver ID: user input or generate unique ID in backend
+      // 1. Resolve Driver ID. Creation below is also guarded transactionally for races.
       let driverId = driverData.driver_id?.trim() || '';
-      if (!driverId) {
-        let candidateNum = Math.floor(1000 + Math.random() * 9000);
-        let attempts = 0;
-        while (drivers.some((d) => d.driver_id === `DRV-${candidateNum}`) && attempts < 20) {
-          candidateNum = Math.floor(1000 + Math.random() * 9000);
-          attempts++;
-        }
-        driverId = `DRV-${candidateNum}`;
-      }
 
       // 2. Resolve Expiry Date: 1 year auto fallback or custom input
       let expiryDate = driverData.expiry_date?.trim() || '';
@@ -920,8 +913,8 @@ export function useCabData() {
       const fcmToken = driverData.fcm_token?.trim() || '';
 
       // 4. Clean single dataset - no duplicate alias fields
-      const newDriver: FirestoreDriver = {
-        driver_id: driverId,
+      const buildDriver = (resolvedDriverId: string): FirestoreDriver => ({
+        driver_id: resolvedDriverId,
         driver_name: driverData.driver_name?.trim() || '',
         mobile_number: driverData.mobile_number?.trim() || '',
         vehicle_number: driverData.vehicle_number?.trim() || '',
@@ -938,19 +931,51 @@ export function useCabData() {
         rating: 5.0,
         total_trips: 0,
         current_trip_id: null,
-      };
+      });
 
       if (isFirebaseConnected) {
-        const saved = await upsertDriverInFirestore(firebaseConfig, newDriver);
-        if (!saved) throw new Error('Driver could not be saved in Firestore.');
+        let created = false;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          if (!driverId) driverId = await generateAvailableDriverId(firebaseConfig);
+          const result = await createDriverInFirestore(firebaseConfig, buildDriver(driverId));
+          if (result === 'created') {
+            created = true;
+            break;
+          }
+          if (result === 'exists') {
+            driverId = await generateAvailableDriverId(firebaseConfig);
+            continue;
+          }
+          throw new Error('Driver could not be saved in Firestore. Check Firestore read/create permissions.');
+        }
+        if (!created) throw new Error('Could not reserve a unique Driver ID. Please try again.');
       }
+
+      const newDriver = buildDriver(driverId || `LOCAL-${Date.now()}`);
 
       setDrivers((prev) => [newDriver, ...prev.filter((d) => d.driver_id !== driverId)]);
       addLog('SUCCESS', 'ADMIN', 'Driver Registered', `Driver ${newDriver.driver_name || driverId} (${driverId}) added to fleet.`);
 
       return newDriver;
     },
-    [drivers, isFirebaseConnected, firebaseConfig, addLog]
+    [isFirebaseConnected, firebaseConfig, addLog]
+  );
+
+  const generateDriverId = useCallback(
+    async () => {
+      if (isFirebaseConnected) return generateAvailableDriverId(firebaseConfig);
+      const existingIds = new Set(driversRef.current.map((driver) => driver.driver_id.trim().toUpperCase()));
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const random = new Uint32Array(1);
+        const entropy = typeof crypto !== 'undefined' && crypto.getRandomValues
+          ? crypto.getRandomValues(random)[0]
+          : Math.floor(Math.random() * 900000);
+        const candidate = String(100000 + (entropy % 900000));
+        if (!existingIds.has(candidate)) return candidate;
+      }
+      throw new Error('Could not generate an unused Driver ID.');
+    },
+    [isFirebaseConnected, firebaseConfig]
   );
 
   const updateDriver = useCallback(
@@ -1337,6 +1362,7 @@ export function useCabData() {
 
     // Driver actions
     registerDriver,
+    generateDriverId,
     updateDriver,
     toggleDriverStatus,
     resetDriverDeviceBinding,

@@ -590,6 +590,73 @@ export async function upsertDriverInFirestore(config: FirebaseConnectionConfig, 
   }
 }
 
+/** Returns an unused random six-digit driver ID from the current Firestore roster. */
+export async function generateAvailableDriverId(config: FirebaseConnectionConfig): Promise<string> {
+  const { db } = getOrCreateFirebaseInstance(config);
+  if (!db) throw new Error('Firestore is not available to generate a Driver ID.');
+
+  const snapshot = await getDocs(collection(db, 'drivers'));
+  const existingIds = new Set<string>();
+  snapshot.docs.forEach((docSnap) => {
+    if (docSnap.id.startsWith('_')) return;
+    const data = docSnap.data();
+    existingIds.add(docSnap.id.trim().toUpperCase());
+    if (data.driver_id) existingIds.add(String(data.driver_id).trim().toUpperCase());
+  });
+
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const random = new Uint32Array(1);
+    const entropy = typeof crypto !== 'undefined' && crypto.getRandomValues
+      ? crypto.getRandomValues(random)[0]
+      : Math.floor(Math.random() * 900000);
+    const candidate = String(100000 + (entropy % 900000));
+    if (!existingIds.has(candidate)) return candidate;
+  }
+
+  throw new Error('Could not generate an unused Driver ID. Please try again.');
+}
+
+/** Creates a driver only when its canonical Firestore document does not already exist. */
+export async function createDriverInFirestore(
+  config: FirebaseConnectionConfig,
+  driver: FirestoreDriver
+): Promise<'created' | 'exists' | 'error'> {
+  try {
+    const { db } = getOrCreateFirebaseInstance(config);
+    if (!db || !driver.driver_id) return 'error';
+    const targetDocId = driver.driver_id.trim();
+    const driverRef = doc(db, 'drivers', targetDocId);
+    const matchingIds = await getDocs(
+      query(collection(db, 'drivers'), where('driver_id', '==', targetDocId), limit(1))
+    );
+    if (!matchingIds.empty) return 'exists';
+    await runTransaction(db, async (transaction) => {
+      const existing = await transaction.get(driverRef);
+      if (existing.exists()) throw new Error('DRIVER_ID_EXISTS');
+      transaction.set(driverRef, {
+        driver_id: targetDocId,
+        driver_name: driver.driver_name || '',
+        mobile_number: driver.mobile_number || '',
+        vehicle_number: driver.vehicle_number || '',
+        vehicle_category: (driver.vehicle_category || 'MINI').trim().toUpperCase(),
+        status: driver.status || 'ACTIVE',
+        is_blocked: driver.status === 'BLOCKED',
+        is_online: Boolean(driver.is_online),
+        expiry_date: driver.expiry_date || '',
+        photo_url: driver.photo_url || '',
+        photo_version: driver.photo_version || 1,
+        device_id: driver.device_id || '',
+        fcm_token: driver.fcm_token || '',
+      });
+    });
+    return 'created';
+  } catch (error: any) {
+    if (error?.message === 'DRIVER_ID_EXISTS') return 'exists';
+    console.error('Error creating driver in Firestore:', error);
+    return 'error';
+  }
+}
+
 /**
  * Scans the Firestore 'drivers' collection, detects repeated / duplicate fields and duplicate documents,
  * and fixes them directly in Firestore:

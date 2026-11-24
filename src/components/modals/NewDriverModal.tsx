@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { FirestoreDriver, VehicleCategory } from '../../types';
 
 interface NewDriverModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSubmit: (driver: Partial<FirestoreDriver>) => Promise<FirestoreDriver>;
+  onGenerateDriverId: () => Promise<string>;
 }
 
 const VEHICLE_CATEGORIES = [
@@ -28,6 +29,7 @@ export const NewDriverModal: React.FC<NewDriverModalProps> = ({
   isOpen,
   onClose,
   onSubmit,
+  onGenerateDriverId,
 }) => {
   const [driverId, setDriverId] = useState('');
   const [driverName, setDriverName] = useState('');
@@ -40,6 +42,16 @@ export const NewDriverModal: React.FC<NewDriverModalProps> = ({
   const [photoUrl, setPhotoUrl] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    setErrorMessage(null);
+    onGenerateDriverId()
+      .then((id) => { if (active) setDriverId(id); })
+      .catch((err: any) => { if (active) setErrorMessage(err.message || 'Could not generate Driver ID.'); });
+    return () => { active = false; };
+  }, [isOpen, onGenerateDriverId]);
 
   if (!isOpen) return null;
 
@@ -131,9 +143,9 @@ export const NewDriverModal: React.FC<NewDriverModalProps> = ({
               <input
                 id="driver-id"
                 type="text"
-                placeholder="Auto-generated if blank"
+                placeholder="Generating..."
                 value={driverId}
-                onChange={(e) => setDriverId(e.target.value)}
+                readOnly
                 className={`${inputClassName} font-mono`}
               />
             </div>

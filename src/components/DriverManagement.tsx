@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { FirestoreDriver, DriverStatus, VehicleCategory } from '../types';
 import {
   Users,
@@ -61,7 +61,7 @@ interface DriverManagementProps {
   globalSearchQuery: string;
 }
 
-const DRIVERS_PER_PAGE = 36; // Optimized for 2000+ driver fleet (fits 1, 2, 3, 4 col grids evenly)
+const DRIVERS_PER_PAGE = 10;
 
 export const DEFAULT_PAYMENT_NOTE = 'Trip CC (Convenience Charge)';
 
@@ -197,10 +197,37 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
 
   // Pagination for 2000+ drivers
   const totalPages = Math.ceil(filteredDrivers.length / DRIVERS_PER_PAGE) || 1;
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, globalSearchQuery, statusFilter, categoryFilter]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
   const paginatedDrivers = useMemo(() => {
-    const page = Math.min(currentPage, totalPages);
-    return filteredDrivers.slice((page - 1) * DRIVERS_PER_PAGE, page * DRIVERS_PER_PAGE);
-  }, [filteredDrivers, currentPage, totalPages]);
+    return filteredDrivers.slice(
+      (safeCurrentPage - 1) * DRIVERS_PER_PAGE,
+      safeCurrentPage * DRIVERS_PER_PAGE
+    );
+  }, [filteredDrivers, safeCurrentPage]);
+
+  const pageNumbers = useMemo<(number | 'ellipsis')[]>(() => {
+    if (totalPages <= 5) return Array.from({ length: totalPages }, (_, index) => index + 1);
+
+    const pages = new Set([1, totalPages, safeCurrentPage - 1, safeCurrentPage, safeCurrentPage + 1]);
+    const orderedPages = Array.from(pages).filter((page) => page > 0 && page <= totalPages).sort((a, b) => a - b);
+    const result: (number | 'ellipsis')[] = [];
+
+    orderedPages.forEach((page, index) => {
+      if (index > 0 && page - orderedPages[index - 1] > 1) result.push('ellipsis');
+      result.push(page);
+    });
+
+    return result;
+  }, [safeCurrentPage, totalPages]);
 
   const handleOpenEditDriver = (drv: FirestoreDriver) => {
     setEditingDriver({ ...drv });
@@ -1106,41 +1133,56 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
         </>
       )}
 
-      {/* Pagination Controls for Fleet Scale (2000+ Drivers) */}
-      {filteredDrivers.length > DRIVERS_PER_PAGE && (
+      {/* Pagination Controls */}
+      {filteredDrivers.length > 0 && (
         <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
           <div className="text-slate-500 font-medium">
-            Showing <strong className="text-slate-800">{(currentPage - 1) * DRIVERS_PER_PAGE + 1}</strong> to{' '}
+            Showing <strong className="text-slate-800">{(safeCurrentPage - 1) * DRIVERS_PER_PAGE + 1}</strong>–
             <strong className="text-slate-800">
-              {Math.min(currentPage * DRIVERS_PER_PAGE, filteredDrivers.length).toLocaleString()}
+              {Math.min(safeCurrentPage * DRIVERS_PER_PAGE, filteredDrivers.length).toLocaleString()}
             </strong>{' '}
             of <strong className="text-slate-800">{filteredDrivers.length.toLocaleString()}</strong> drivers
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1">
             <button
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-              className="p-1.5 px-3 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition flex items-center gap-1 font-semibold"
+              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+              disabled={safeCurrentPage === 1}
+              className="p-1.5 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition flex items-center gap-1 font-semibold"
             >
               <ChevronLeft className="w-4 h-4" />
-              <span>Prev</span>
+              <span className="hidden sm:inline">Previous</span>
             </button>
 
-            <div className="flex items-center gap-1 px-1">
-              <span className="font-bold text-slate-900 bg-amber-100 text-amber-950 px-2.5 py-1 rounded-lg">
-                {currentPage}
-              </span>
-              <span className="text-slate-400">/</span>
-              <span className="text-slate-600 font-medium">{totalPages}</span>
+            <div className="flex items-center gap-1 px-1" aria-label="Driver pages">
+              {pageNumbers.map((page, index) =>
+                page === 'ellipsis' ? (
+                  <span key={`ellipsis-${index}`} className="px-1 text-slate-400">…</span>
+                ) : (
+                  <button
+                    key={page}
+                    type="button"
+                    onClick={() => setCurrentPage(page)}
+                    aria-current={safeCurrentPage === page ? 'page' : undefined}
+                    className={`min-w-8 rounded-lg px-2 py-1.5 font-semibold transition cursor-pointer ${
+                      safeCurrentPage === page
+                        ? 'bg-amber-100 text-amber-950'
+                        : 'text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {page}
+                  </button>
+                )
+              )}
             </div>
+            <span className="whitespace-nowrap text-slate-500">Page {safeCurrentPage} of {totalPages}</span>
 
             <button
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
-              className="p-1.5 px-3 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition flex items-center gap-1 font-semibold"
+              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+              disabled={safeCurrentPage === totalPages}
+              className="p-1.5 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition flex items-center gap-1 font-semibold"
             >
-              <span>Next</span>
+              <span className="hidden sm:inline">Next</span>
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>

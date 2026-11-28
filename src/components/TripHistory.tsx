@@ -78,13 +78,22 @@ const getTripDropLocation = (trip: FirestoreTrip): string =>
     ? getLocationText(trip.actual_end_location) || trip.drop_location
     : trip.drop_location;
 
-type FareBreakdownItem = { label?: string; amount?: number | string; detail?: string };
+type FareBreakdownItem = { label: string; amount: number | string; detail: string };
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object';
 const parseFareBreakdown = (value: unknown): FareBreakdownItem[] => {
   if (typeof value !== 'string' || !value.trim()) return [];
   try {
-    const parsed = JSON.parse(value);
-    const items = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.items) ? parsed.items : [];
-    return items.filter((item): item is FareBreakdownItem => item && typeof item === 'object');
+    const parsed: unknown = JSON.parse(value);
+    const items: unknown[] = Array.isArray(parsed)
+      ? parsed
+      : isRecord(parsed) && Array.isArray(parsed.items)
+        ? parsed.items
+        : [];
+    return items.filter(isRecord).map((item: Record<string, unknown>): FareBreakdownItem => ({
+      label: typeof item.label === 'string' && item.label.trim() ? item.label : 'Adjustment',
+      detail: typeof item.detail === 'string' ? item.detail : '',
+      amount: typeof item.amount === 'number' || typeof item.amount === 'string' ? item.amount : '',
+    }));
   } catch {
     return [];
   }
@@ -103,84 +112,154 @@ const formatAmount = (value: unknown): string => {
   return Number.isFinite(amount) ? `₹${amount.toFixed(2)}` : '—';
 };
 const getValidWhatsAppPhone = (phone?: string): string => {
-  const normalized = formatPhoneNumberForWhatsApp(phone);
-  return /^\d{10,15}$/.test(normalized) ? normalized : '';
+  let normalized = formatPhoneNumberForWhatsApp(phone).replace(/\D/g, '');
+  if (normalized.startsWith('00')) normalized = normalized.slice(2);
+  if (normalized.length === 10) normalized = `91${normalized}`;
+  return /^91\d{10}$/.test(normalized) ? normalized : '';
 };
 
-const loadImageData = async (url?: string): Promise<string | null> => {
+type LoadedImage = { data: string; width: number; height: number; format: 'JPEG' | 'PNG' };
+
+const googleDriveFileId = (url: string): string | null => {
+  const match = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/i) || url.match(/[?&]id=([^&#]+)/i);
+  return match?.[1] || null;
+};
+
+const imageCandidates = (url: string): string[] => {
+  const id = googleDriveFileId(url);
+  if (!id) return [url];
+  return [
+    `https://drive.usercontent.google.com/download?id=${encodeURIComponent(id)}&export=download&confirm=t`,
+    `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`,
+  ];
+};
+
+const loadImageData = async (url?: string): Promise<LoadedImage | null> => {
   if (!url) return null;
-  if (url.startsWith('data:image/')) return url;
+  for (const candidate of imageCandidates(url)) {
+    try {
+      const response = await fetch(candidate, { mode: 'cors' });
+      if (!response.ok) continue;
+      const source = URL.createObjectURL(await response.blob());
+      const loaded = await new Promise<LoadedImage | null>((resolve) => {
+        const image = new Image();
+        image.onload = () => {
+          const maxSize = 640;
+          const scale = Math.min(1, maxSize / Math.max(image.naturalWidth, image.naturalHeight));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+          canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+          const context = canvas.getContext('2d');
+          if (!context) { resolve(null); return; }
+          context.drawImage(image, 0, 0, canvas.width, canvas.height);
+          resolve({ data: canvas.toDataURL('image/jpeg', 0.78), width: canvas.width, height: canvas.height, format: 'JPEG' });
+        };
+        image.onerror = () => resolve(null);
+        image.src = source;
+      });
+      URL.revokeObjectURL(source);
+      if (loaded) return loaded;
+    } catch {
+      // An inaccessible or CORS-blocked image is omitted safely.
+    }
+  }
+  return null;
+};
+
+const loadReceiptFont = async (pdf: jsPDF): Promise<boolean> => {
   try {
-    const response = await fetch(url);
-    if (!response.ok) return null;
-    const blob = await response.blob();
-    return await new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
-      reader.onerror = () => resolve(null);
-      reader.readAsDataURL(blob);
-    });
+    const response = await fetch('/fonts/NotoSansTamil.ttf');
+    if (!response.ok) return false;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    let binary = '';
+    for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+    const base64 = btoa(binary);
+    pdf.addFileToVFS('NotoSansTamil.ttf', base64);
+    pdf.addFont('NotoSansTamil.ttf', 'NotoSansTamil', 'normal');
+    pdf.addFont('NotoSansTamil.ttf', 'NotoSansTamil', 'bold');
+    pdf.setFont('NotoSansTamil', 'normal');
+    return true;
   } catch {
-    return null;
+    return false;
   }
 };
 
 const createTripReceiptPdf = async (trip: FirestoreTrip, driver: FirestoreDriver | null, items: FareBreakdownItem[]): Promise<jsPDF> => {
-  const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
+  const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+  const hasUnicodeFont = await loadReceiptFont(pdf);
+  const font = hasUnicodeFont ? 'NotoSansTamil' : 'helvetica';
   const margin = 16;
-  const pageWidth = 210;
-  const right = pageWidth - margin;
+  const width = 210;
+  const right = width - margin;
   const text = (value: unknown) => String(value ?? '—');
-  const line = (y: number) => { pdf.setDrawColor(226, 232, 240); pdf.line(margin, y, right, y); };
-  const row = (label: string, value: unknown, y: number, valueColor = [51, 65, 85]) => {
-    pdf.setFontSize(9); pdf.setTextColor(100, 116, 139); pdf.text(label, margin, y);
-    pdf.setTextColor(valueColor[0], valueColor[1], valueColor[2]); pdf.text(pdf.splitTextToSize(text(value), 105), right, y, { align: 'right' });
+  const setFont = (style: 'normal' | 'bold' = 'normal') => pdf.setFont(font, style);
+  const rounded = (x: number, y: number, w: number, h: number, fill: [number, number, number]) => { pdf.setFillColor(...fill); pdf.roundedRect(x, y, w, h, 3, 3, 'F'); };
+  const divider = (y: number) => { pdf.setDrawColor(226, 232, 240); pdf.line(margin, y, right, y); };
+  const writeWrapped = (value: unknown, x: number, y: number, maxWidth: number, size = 8, color: [number, number, number] = [51, 65, 85]) => {
+    pdf.setFontSize(size); pdf.setTextColor(...color); pdf.text(pdf.splitTextToSize(text(value), maxWidth), x, y, { lineHeightFactor: 1.25 });
+  };
+  const labelValue = (label: string, value: unknown, x: number, y: number, maxWidth: number) => {
+    setFont('bold'); pdf.setFontSize(7.5); pdf.setTextColor(100, 116, 139); pdf.text(label.toUpperCase(), x, y);
+    setFont(); writeWrapped(value, x, y + 5, maxWidth, 9, [15, 23, 42]);
   };
 
-  pdf.setFillColor(245, 158, 11); pdf.rect(0, 0, pageWidth, 8, 'F');
-  pdf.setTextColor(15, 23, 42); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(20); pdf.text('TRUSTY YELLOW CABS', margin, 23);
-  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(71, 85, 105); pdf.text('Chennai, Tamil Nadu  |  trustyyellowcabs@gmail.com', margin, 29);
-  pdf.setTextColor(15, 23, 42); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(15); pdf.text('TRIP RECEIPT', right, 23, { align: 'right' });
-  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); pdf.text(`Invoice: ${trip.trip_id}`, right, 29, { align: 'right' });
-  line(35);
+  const logo = await loadImageData('/Trusty cabs logo.jpg');
+  pdf.setFillColor(247, 183, 0); pdf.rect(0, 0, width, 5, 'F');
+  if (logo) { try { pdf.addImage(logo.data, logo.format, margin, 12, 32, 20); } catch { /* logo is optional */ } }
+  setFont('bold'); pdf.setFontSize(15); pdf.setTextColor(15, 23, 42); pdf.text('TRUSTY YELLOW CABS', right, 16, { align: 'right' });
+  setFont(); pdf.setFontSize(7.5); pdf.setTextColor(71, 85, 105); pdf.text(['Coimbatore, Tamil Nadu – 641007', '+91 422-3596446', 'trustyyellowcabs@gmail.com', 'www.trustyyellowcabs.in'], right, 21, { align: 'right', lineHeightFactor: 1.35 });
+  setFont('bold'); pdf.setFontSize(20); pdf.setTextColor(15, 23, 42); pdf.text('INVOICE', right, 48, { align: 'right' });
+  setFont(); pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); pdf.text(`Invoice No: ${text(trip.trip_id)}`, right, 54, { align: 'right' });
+  divider(61);
 
-  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(15, 23, 42); pdf.text('TRIP SUMMARY', margin, 44);
-  row('Invoice date', formatIST(trip.created_at), 52); row('Passenger', trip.customer_name, 59); row('Mobile', trip.customer_phone, 66);
-  row('Start time', formatIST(trip.started_at), 73); row('End time', formatIST(trip.completed_at), 80);
-  line(87);
-  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(15, 23, 42); pdf.text('JOURNEY', margin, 96);
-  row('Pickup', getTripPickupLocation(trip), 104); row('Drop', getTripDropLocation(trip), 114);
-  row('Vehicle', `${trip.vehicle_category || '—'}  |  ${trip.vehicle_number || '—'}`, 124);
+  rounded(margin, 68, 86, 36, [248, 250, 252]); rounded(108, 68, 86, 36, [248, 250, 252]);
+  setFont('bold'); pdf.setFontSize(9); pdf.setTextColor(15, 23, 42); pdf.text('PASSENGER DETAILS', margin + 6, 76); pdf.text('TRIP TIMINGS', 114, 76);
+  labelValue('Name', trip.customer_name, margin + 6, 83, 72); labelValue('Mobile', trip.customer_phone, margin + 6, 94, 72);
+  labelValue('Date', formatIST(trip.created_at), 114, 83, 72); labelValue('Start / End', `${formatIST(trip.started_at)} / ${formatIST(trip.completed_at)}`, 114, 94, 72);
+
+  setFont('bold'); pdf.setFontSize(10); pdf.setTextColor(15, 23, 42); pdf.text('JOURNEY DETAILS', margin, 116);
+  pdf.setFillColor(22, 163, 74); pdf.circle(margin + 2, 126, 2, 'F'); pdf.setFillColor(220, 38, 38); pdf.circle(margin + 2, 145, 2, 'F');
+  pdf.setDrawColor(203, 213, 225); pdf.setLineDashPattern([1, 1], 0); pdf.line(margin + 2, 128, margin + 2, 143); pdf.setLineDashPattern([], 0);
+  labelValue('Pickup', getTripPickupLocation(trip), margin + 9, 124, 169); labelValue('Drop', getTripDropLocation(trip), margin + 9, 143, 169);
+
+  rounded(margin, 157, 178, 25, [248, 250, 252]);
+  labelValue('Vehicle Details', `${trip.vehicle_category || '—'}  |  ${trip.vehicle_number || '—'}`, margin + 6, 166, 80);
+  labelValue('Total Distance', trip.distance_km == null ? '—' : `${trip.distance_km.toFixed(2)} km`, 112, 166, 58);
+  labelValue('Duration', formatDuration(trip.duration_seconds), margin + 6, 177, 80);
   const isPackageTrip = trip.trip_type === 'PACKAGE' || trip.is_package;
-  const journeyOffset = isPackageTrip ? 14 : 0;
-  if (isPackageTrip) {
-    row('Package', trip.package_name, 131);
-    row('Included', `${trip.included_km ?? '—'} km  |  ${trip.included_minutes ?? '—'} min`, 138);
-  }
-  row('Distance', trip.distance_km == null ? '—' : `${trip.distance_km.toFixed(2)} km`, 131 + journeyOffset);
-  row('Duration', formatDuration(trip.duration_seconds), 138 + journeyOffset);
-  line(145 + journeyOffset);
-  const fareHeadingY = 154 + journeyOffset;
-  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(15, 23, 42); pdf.text('FARE BREAKDOWN', margin, fareHeadingY);
-  let y = fareHeadingY + 9;
-  items.forEach((item) => {
-    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(51, 65, 85); pdf.text(text(item.label || 'Adjustment'), margin, y);
-    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); if (item.detail) pdf.text(pdf.splitTextToSize(item.detail, 115), margin + 2, y + 4);
-    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(51, 65, 85); pdf.text(formatAmount(item.amount), right, y, { align: 'right' });
-    y += item.detail ? 11 : 7;
-  });
-  if (!items.length) { pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); pdf.text('No saved fare breakdown available.', margin, y); y += 8; }
-  line(Math.min(y + 1, 258)); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(14); pdf.setTextColor(22, 101, 52); pdf.text('Total Payable', margin, Math.min(y + 12, 270)); pdf.text(formatAmount(trip.final_fare), right, Math.min(y + 12, 270), { align: 'right' });
-  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); pdf.text('Terms: This receipt reflects the saved completed-trip fare. Please retain it for your records.', margin, 284);
+  if (isPackageTrip) { setFont(); pdf.setFontSize(7.5); pdf.setTextColor(100, 116, 139); pdf.text(`Package: ${text(trip.package_name)}  |  Included: ${trip.included_km ?? '—'} km / ${trip.included_minutes ?? '—'} min`, 112, 178); }
 
-  pdf.addPage(); pdf.setFillColor(245, 158, 11); pdf.rect(0, 0, pageWidth, 8, 'F'); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(20); pdf.setTextColor(15, 23, 42); pdf.text('DRIVER PROFILE', margin, 28);
-  const photo = await loadImageData(driver?.photo_url || driver?.profile_photo_url);
-  if (photo) { try { pdf.addImage(photo, photo.startsWith('data:image/png') ? 'PNG' : 'JPEG', margin, 40, 35, 35); } catch { /* unsupported image format */ } }
-  const profileX = photo ? margin + 45 : margin;
-  pdf.setFontSize(16); pdf.setTextColor(15, 23, 42); pdf.text(driver?.driver_name || trip.driver_name || 'Unassigned', profileX, 49);
-  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10); pdf.setTextColor(71, 85, 105); pdf.text(`Driver ID: ${trip.driver_id || driver?.driver_id || '—'}`, profileX, 57); pdf.text(`Vehicle: ${trip.vehicle_category || driver?.vehicle_category || '—'}`, profileX, 64); pdf.text(`Registration: ${trip.vehicle_number || driver?.vehicle_number || '—'}`, profileX, 71);
-  line(91); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11); pdf.setTextColor(15, 23, 42); pdf.text('OFFICIAL COMPANY INFORMATION', margin, 103); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10); pdf.setTextColor(71, 85, 105); pdf.text(['Trusty Yellow Cabs', 'Chennai, Tamil Nadu', 'trustyyellowcabs@gmail.com', 'Thank you for choosing Trusty Yellow Cabs.'], margin, 114, { lineHeightFactor: 1.8 });
-  pdf.setFontSize(8); pdf.setTextColor(148, 163, 184); pdf.text('Generated securely on this device from the existing trip record.', margin, 280);
+  setFont('bold'); pdf.setFontSize(10); pdf.setTextColor(15, 23, 42); pdf.text('CHARGES BREAKDOWN', margin, 196); divider(200);
+  let y = 207;
+  items.forEach((item) => {
+    setFont('bold'); pdf.setFontSize(8.5); pdf.setTextColor(51, 65, 85); pdf.text(text(item.label || 'Adjustment'), margin, y);
+    if (item.detail) { setFont(); pdf.setFontSize(7); pdf.setTextColor(100, 116, 139); pdf.text(pdf.splitTextToSize(item.detail, 125), margin + 2, y + 4, { lineHeightFactor: 1.15 }); }
+    setFont('bold'); pdf.setFontSize(8.5); pdf.setTextColor(51, 65, 85); pdf.text(formatAmount(item.amount), right, y, { align: 'right' });
+    y += item.detail ? 10 : 7;
+  });
+  if (!items.length) { setFont(); pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); pdf.text('No saved fare breakdown available.', margin, y); y += 8; }
+  divider(Math.min(y + 1, 248));
+  rounded(110, 254, 84, 25, [248, 250, 252]); setFont(); pdf.setFontSize(8); pdf.setTextColor(71, 85, 105); pdf.text('Grand Total', 116, 263); pdf.text('Balance Payable', 116, 273);
+  setFont('bold'); pdf.setFontSize(12); pdf.setTextColor(22, 101, 52); pdf.text(formatAmount(trip.final_fare), right - 6, 264, { align: 'right' }); pdf.setFontSize(10); pdf.text(formatAmount(trip.final_fare), right - 6, 274, { align: 'right' });
+  setFont('bold'); pdf.setFontSize(8); pdf.setTextColor(15, 23, 42); pdf.text('TERMS & CONDITIONS', margin, 258); setFont(); pdf.setFontSize(7); pdf.setTextColor(100, 116, 139); pdf.text(['This receipt reflects the saved completed-trip fare.', 'Please retain this invoice for your records.'], margin, 265, { lineHeightFactor: 1.5 });
+  setFont(); pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); pdf.text('Thank you for choosing Trusty Yellow Cabs.', margin, 288);
+
+  pdf.addPage(); pdf.setFillColor(247, 183, 0); pdf.rect(0, 0, width, 5, 'F');
+  setFont('bold'); pdf.setFontSize(17); pdf.setTextColor(15, 23, 42); pdf.text('TRUSTY YELLOW CABS', margin, 24); setFont(); pdf.setFontSize(9); pdf.setTextColor(71, 85, 105); pdf.text('Trusted & Verified Service', margin, 31); pdf.setFontSize(8); pdf.text('Driver Profile – Passenger Safety Board', margin, 38);
+  const photo = await loadImageData(driver?.photo_url);
+  const photoX = margin; const photoY = 52; const photoBox = 53;
+  rounded(photoX, photoY, photoBox, photoBox, [248, 250, 252]);
+  if (photo) {
+    try {
+      const scale = Math.min((photoBox - 6) / photo.width, (photoBox - 6) / photo.height);
+      const imageWidth = photo.width * scale; const imageHeight = photo.height * scale;
+      pdf.addImage(photo.data, photo.format, photoX + (photoBox - imageWidth) / 2, photoY + (photoBox - imageHeight) / 2, imageWidth, imageHeight);
+    } catch { /* failed image embedding is omitted safely */ }
+  }
+  setFont('bold'); pdf.setFontSize(16); pdf.setTextColor(15, 23, 42); pdf.text(driver?.driver_name || trip.driver_name || 'Unassigned', 82, 68); setFont(); pdf.setFontSize(10); pdf.setTextColor(71, 85, 105); pdf.text(`Vehicle Category: ${trip.vehicle_category || driver?.vehicle_category || '—'}`, 82, 78); pdf.text(`Registration Number: ${trip.vehicle_number || driver?.vehicle_number || '—'}`, 82, 87); pdf.text(`Driver ID: ${trip.driver_id || driver?.driver_id || '—'}`, 82, 96);
+  rounded(margin, 123, 178, 69, [248, 250, 252]); setFont('bold'); pdf.setFontSize(10); pdf.setTextColor(15, 23, 42); pdf.text('OFFICIAL COMPANY INFORMATION', margin + 8, 135); setFont(); pdf.setFontSize(9); pdf.setTextColor(71, 85, 105); pdf.text(['Trusty Yellow Cabs', 'Coimbatore, Tamil Nadu – 641007', '+91 422-3596446', 'trustyyellowcabs@gmail.com', 'www.trustyyellowcabs.in'], margin + 8, 146, { lineHeightFactor: 1.7 });
+  setFont('bold'); pdf.setFontSize(11); pdf.setTextColor(22, 101, 52); pdf.text('Your safety is our priority.', margin, 226); setFont(); pdf.setFontSize(9); pdf.setTextColor(71, 85, 105); pdf.text(['Every Trusty Yellow Cabs driver is verified for your comfort and safety.', 'Thank you for travelling with us.'], margin, 237, { lineHeightFactor: 1.7 });
+  setFont(); pdf.setFontSize(8); pdf.setTextColor(148, 163, 184); pdf.text('Trusty Yellow Cabs  |  Trusted & Verified Service', margin, 280); pdf.text('Thank you for choosing Trusty Yellow Cabs.', margin, 288);
   return pdf;
 };
 
@@ -458,13 +537,19 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
     );
   };
 
+  const getReceiptDriver = (t: FirestoreTrip): FirestoreDriver | null => {
+    const cleanDriverId = (t.driver_id || '').trim().toUpperCase();
+    if (!cleanDriverId) return null;
+    return drivers.find((d) => d.driver_id.trim().toUpperCase() === cleanDriverId || d.doc_id === t.driver_id) || null;
+  };
+
   const handleShareReceipt = async (t: FirestoreTrip) => {
     if (t.status !== 'COMPLETED') return;
     const tripKey = t.doc_id || t.trip_id;
     setSharingTripId(tripKey);
     setShareFeedback(null);
     try {
-      const pdf = await createTripReceiptPdf(t, getDriverForTrip(t), parseFareBreakdown(t.finalized_fare_breakdown));
+      const pdf = await createTripReceiptPdf(t, getReceiptDriver(t), parseFareBreakdown(t.finalized_fare_breakdown));
       const blob = pdf.output('blob');
       const filename = `trip_receipt_${(t.trip_id || 'trip').replace(/[^a-z0-9_-]/gi, '_')}.pdf`;
       const file = new File([blob], filename, { type: 'application/pdf' });

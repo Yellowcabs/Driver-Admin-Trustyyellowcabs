@@ -109,7 +109,7 @@ const formatDuration = (seconds: number | null | undefined): string => {
 };
 const formatAmount = (value: unknown): string => {
   const amount = Number(value);
-  return Number.isFinite(amount) ? `₹${amount.toFixed(2)}` : '—';
+  return Number.isFinite(amount) ? `\u20B9${amount.toFixed(2)}` : '—';
 };
 const getValidWhatsAppPhone = (phone?: string): string => {
   let normalized = formatPhoneNumberForWhatsApp(phone).replace(/\D/g, '');
@@ -312,7 +312,7 @@ const createTripReceiptPdf = async (trip: FirestoreTrip, driver: FirestoreDriver
   const font = hasUnicodeFont ? 'NotoSansTamil' : 'helvetica';
   const margin = 12;
   const right = 198;
-  const setFont = (style: 'normal' | 'bold' = 'normal') => pdf.setFont(font, style);
+  const setFont = (style: 'normal' | 'bold' = 'normal') => { pdf.setCharSpace(0); pdf.setFont(font, style); };
   const divider = (y: number) => { pdf.setDrawColor(226, 232, 240); pdf.line(margin, y, right, y); };
   const box = (x: number, y: number, w: number, h: number, fill: [number, number, number], border = false) => { pdf.setFillColor(...fill); pdf.setDrawColor(203, 213, 225); pdf.roundedRect(x, y, w, h, 3, 3, border ? 'FD' : 'F'); };
   const value = (input: unknown) => String(input ?? 'N/A');
@@ -320,7 +320,7 @@ const createTripReceiptPdf = async (trip: FirestoreTrip, driver: FirestoreDriver
   const label = (name: string, input: unknown, x: number, y: number, maxWidth: number) => { setFont('bold'); pdf.setFontSize(9); pdf.setTextColor(71, 85, 105); pdf.text(name.toUpperCase(), x, y); setFont(); pdf.setTextColor(15, 23, 42); wrapped(input, x, y + 6, maxWidth, 10.5); };
 
   const logo = await loadImageData('/Trusty cabs logo.jpg');
-  if (logo) { try { const trimmedLogo = await trimLogoWhitespace(logo); const logoScale = Math.min(28 / trimmedLogo.width, 28 / trimmedLogo.height); const logoWidth = trimmedLogo.width * logoScale; const logoHeight = trimmedLogo.height * logoScale; pdf.addImage(trimmedLogo.data, trimmedLogo.format, margin, 14, logoWidth, logoHeight); } catch { /* optional logo */ } }
+  if (logo) { try { const trimmedLogo = await trimLogoWhitespace(logo); const logoScale = Math.min(28 / trimmedLogo.width, 28 / trimmedLogo.height); const logoWidth = trimmedLogo.width * logoScale; const logoHeight = trimmedLogo.height * logoScale; pdf.addImage(trimmedLogo.data, trimmedLogo.format, margin, 14, logoWidth, logoHeight); } catch { pdf.addImage(logo.data, logo.format, margin, 14, 28, 28); } }
   setFont('bold'); pdf.setFontSize(12); pdf.setTextColor(17, 24, 39); pdf.text('TRUSTY YELLOW CAB', right, 16, { align: 'right' });
   setFont(); pdf.setFontSize(9); pdf.setTextColor(71, 85, 105); pdf.text(['COIMBATORE, TAMILNADU - 641007', '+91 422-3596446', 'trustyyellowcabs@gmail.com', 'www.trustyyellowcabs.in'], right, 21, { align: 'right', lineHeightFactor: 1.25 });
   setFont('bold'); pdf.setFontSize(28); pdf.setTextColor(17, 24, 39); pdf.text('INVOICE', margin, 53); setFont(); pdf.setFontSize(9); pdf.setTextColor(71, 85, 105); pdf.text(`Invoice No: ${value(trip.trip_id)}`, margin, 60); pdf.text(`Date: ${formatIST(trip.created_at)}`, right, 48, { align: 'right' }); divider(69);
@@ -374,6 +374,7 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
   const [openTripMenuId, setOpenTripMenuId] = useState<string | null>(null);
   const [expandedCompletedTripId, setExpandedCompletedTripId] = useState<string | null>(null);
   const [sharingTripId, setSharingTripId] = useState<string | null>(null);
+  const [pendingPdfShare, setPendingPdfShare] = useState<{ tripId: string; file: File } | null>(null);
   const [shareFeedback, setShareFeedback] = useState<{ tripId: string; type: 'success' | 'error'; message: string } | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -660,23 +661,43 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
   const handleShareReceipt = async (t: FirestoreTrip) => {
     if (t.status !== 'COMPLETED') return;
     const tripKey = t.doc_id || t.trip_id;
+    if (pendingPdfShare?.tripId === tripKey && navigator.share) {
+      setSharingTripId(tripKey);
+      try {
+        await navigator.share({ files: [pendingPdfShare.file] });
+        setPendingPdfShare(null);
+        setShareFeedback({ tripId: tripKey, type: 'success', message: 'PDF ready to share.' });
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          setShareFeedback({ tripId: tripKey, type: 'error', message: 'Could not share the PDF file.' });
+        }
+      } finally {
+        setSharingTripId(null);
+      }
+      return;
+    }
     const whatsappWindow = window.open('', '_blank');
     setSharingTripId(tripKey);
     setShareFeedback(null);
     try {
       const { blob, file, filename } = await prepareReceiptFile(t);
       const phone = getValidWhatsAppPhone(t.customer_phone);
-      const message = `Hello ${t.customer_name || 'Customer'}, your Trusty Yellow Cabs receipt for trip ${t.trip_id} is ready.`;
-      const whatsappUrl = phone ? `https://wa.me/${phone}?text=${encodeURIComponent(message)}` : '';
+      const whatsappUrl = phone ? `https://wa.me/${phone}` : '';
 
       if (navigator.share && navigator.canShare?.({ files: [file] })) {
         try {
-          await navigator.share({ title: `Trip receipt ${t.trip_id}`, text: message, files: [file] });
+          await navigator.share({ title: `Trip receipt ${t.trip_id}`, files: [file] });
           whatsappWindow?.close();
           setShareFeedback({ tripId: tripKey, type: 'success', message: 'PDF ready to share.' });
           return;
         } catch (error) {
           if (error instanceof DOMException && error.name === 'AbortError') { whatsappWindow?.close(); return; }
+          if (error instanceof DOMException && error.name === 'NotAllowedError') {
+            whatsappWindow?.close();
+            setPendingPdfShare({ tripId: tripKey, file });
+            setShareFeedback({ tripId: tripKey, type: 'error', message: 'PDF ready. Tap Share PDF again to open file sharing.' });
+            return;
+          }
         }
       }
 

@@ -114,8 +114,9 @@ const formatAmount = (value: unknown): string => {
 const getValidWhatsAppPhone = (phone?: string): string => {
   let normalized = formatPhoneNumberForWhatsApp(phone).replace(/\D/g, '');
   if (normalized.startsWith('00')) normalized = normalized.slice(2);
+  while (normalized.startsWith('9191') && normalized.length > 12) normalized = normalized.slice(2);
   if (normalized.length === 10) normalized = `91${normalized}`;
-  return /^91\d{10}$/.test(normalized) ? normalized : '';
+  return /^91[6-9]\d{9}$/.test(normalized) ? normalized : '';
 };
 
 type LoadedImage = { data: string; width: number; height: number; format: 'JPEG' | 'PNG' };
@@ -131,16 +132,27 @@ const imageCandidates = (url: string): string[] => {
   return [
     `https://drive.usercontent.google.com/download?id=${encodeURIComponent(id)}&export=download&confirm=t`,
     `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`,
+    `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w640`,
+    `https://lh3.googleusercontent.com/d/${encodeURIComponent(id)}=w640`,
   ];
 };
 
 const loadImageData = async (url?: string): Promise<LoadedImage | null> => {
   if (!url) return null;
+  const failures: string[] = [];
   for (const candidate of imageCandidates(url)) {
     try {
       const response = await fetch(candidate, { mode: 'cors' });
-      if (!response.ok) continue;
-      const source = URL.createObjectURL(await response.blob());
+      if (!response.ok) {
+        failures.push(`${candidate} returned HTTP ${response.status}`);
+        continue;
+      }
+      const blob = await response.blob();
+      if (!blob.type.startsWith('image/')) {
+        failures.push(`${candidate} returned ${blob.type || 'non-image data'}`);
+        continue;
+      }
+      const source = URL.createObjectURL(blob);
       const loaded = await new Promise<LoadedImage | null>((resolve) => {
         const image = new Image();
         image.onload = () => {
@@ -151,19 +163,50 @@ const loadImageData = async (url?: string): Promise<LoadedImage | null> => {
           canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
           const context = canvas.getContext('2d');
           if (!context) { resolve(null); return; }
-          context.drawImage(image, 0, 0, canvas.width, canvas.height);
-          resolve({ data: canvas.toDataURL('image/jpeg', 0.78), width: canvas.width, height: canvas.height, format: 'JPEG' });
+          try {
+            context.drawImage(image, 0, 0, canvas.width, canvas.height);
+            resolve({ data: canvas.toDataURL('image/jpeg', 0.78), width: canvas.width, height: canvas.height, format: 'JPEG' });
+          } catch (error) {
+            failures.push(`${candidate} could not be rasterized: ${error instanceof Error ? error.message : String(error)}`);
+            resolve(null);
+          }
         };
-        image.onerror = () => resolve(null);
+        image.onerror = () => { failures.push(`${candidate} image decode failed`); resolve(null); };
         image.src = source;
       });
       URL.revokeObjectURL(source);
       if (loaded) return loaded;
-    } catch {
-      // An inaccessible or CORS-blocked image is omitted safely.
+    } catch (error) {
+      failures.push(`${candidate} failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+  console.error(`Trip receipt image could not be loaded from ${url}.`, failures.join(' | ') || 'No image URL was provided.');
   return null;
+};
+
+const trimLogoWhitespace = async (image: LoadedImage): Promise<LoadedImage> => {
+  const source = await new Promise<HTMLImageElement | null>((resolve) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => resolve(null);
+    element.src = image.data;
+  });
+  if (!source) return image;
+  const canvas = document.createElement('canvas');
+  canvas.width = source.naturalWidth; canvas.height = source.naturalHeight;
+  const context = canvas.getContext('2d');
+  if (!context) return image;
+  context.drawImage(source, 0, 0);
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  let left = canvas.width; let top = canvas.height; let right = -1; let bottom = -1;
+  for (let y = 0; y < canvas.height; y += 1) for (let x = 0; x < canvas.width; x += 1) {
+    const index = (y * canvas.width + x) * 4;
+    if (pixels[index] < 245 || pixels[index + 1] < 245 || pixels[index + 2] < 245) { left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x); bottom = Math.max(bottom, y); }
+  }
+  if (right < left || bottom < top) return image;
+  const cropped = document.createElement('canvas'); cropped.width = right - left + 1; cropped.height = bottom - top + 1;
+  cropped.getContext('2d')?.drawImage(canvas, left, top, cropped.width, cropped.height, 0, 0, cropped.width, cropped.height);
+  return { data: cropped.toDataURL('image/jpeg', 0.9), width: cropped.width, height: cropped.height, format: 'JPEG' };
 };
 
 const loadReceiptFont = async (pdf: jsPDF): Promise<boolean> => {
@@ -184,7 +227,7 @@ const loadReceiptFont = async (pdf: jsPDF): Promise<boolean> => {
   }
 };
 
-const createTripReceiptPdf = async (trip: FirestoreTrip, driver: FirestoreDriver | null, items: FareBreakdownItem[]): Promise<jsPDF> => {
+const createLegacyTripReceiptPdf = async (trip: FirestoreTrip, driver: FirestoreDriver | null, items: FareBreakdownItem[]): Promise<jsPDF> => {
   const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
   const hasUnicodeFont = await loadReceiptFont(pdf);
   const font = hasUnicodeFont ? 'NotoSansTamil' : 'helvetica';
@@ -261,6 +304,44 @@ const createTripReceiptPdf = async (trip: FirestoreTrip, driver: FirestoreDriver
   setFont('bold'); pdf.setFontSize(11); pdf.setTextColor(22, 101, 52); pdf.text('Your safety is our priority.', margin, 226); setFont(); pdf.setFontSize(9); pdf.setTextColor(71, 85, 105); pdf.text(['Every Trusty Yellow Cabs driver is verified for your comfort and safety.', 'Thank you for travelling with us.'], margin, 237, { lineHeightFactor: 1.7 });
   setFont(); pdf.setFontSize(8); pdf.setTextColor(148, 163, 184); pdf.text('Trusty Yellow Cabs  |  Trusted & Verified Service', margin, 280); pdf.text('Thank you for choosing Trusty Yellow Cabs.', margin, 288);
   return pdf;
+};
+
+const createTripReceiptPdf = async (trip: FirestoreTrip, driver: FirestoreDriver | null, items: FareBreakdownItem[]): Promise<jsPDF> => {
+  const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+  const hasUnicodeFont = await loadReceiptFont(pdf);
+  const font = hasUnicodeFont ? 'NotoSansTamil' : 'helvetica';
+  const margin = 12;
+  const right = 198;
+  const setFont = (style: 'normal' | 'bold' = 'normal') => pdf.setFont(font, style);
+  const divider = (y: number) => { pdf.setDrawColor(226, 232, 240); pdf.line(margin, y, right, y); };
+  const box = (x: number, y: number, w: number, h: number, fill: [number, number, number], border = false) => { pdf.setFillColor(...fill); pdf.setDrawColor(203, 213, 225); pdf.roundedRect(x, y, w, h, 3, 3, border ? 'FD' : 'F'); };
+  const value = (input: unknown) => String(input ?? 'N/A');
+  const wrapped = (input: unknown, x: number, y: number, maxWidth: number, size = 8) => { pdf.setFontSize(size); pdf.text(pdf.splitTextToSize(value(input), maxWidth), x, y, { lineHeightFactor: 1.2 }); };
+  const label = (name: string, input: unknown, x: number, y: number, maxWidth: number) => { setFont('bold'); pdf.setFontSize(9); pdf.setTextColor(71, 85, 105); pdf.text(name.toUpperCase(), x, y); setFont(); pdf.setTextColor(15, 23, 42); wrapped(input, x, y + 6, maxWidth, 10.5); };
+
+  const logo = await loadImageData('/Trusty cabs logo.jpg');
+  if (logo) { try { const trimmedLogo = await trimLogoWhitespace(logo); const logoScale = Math.min(28 / trimmedLogo.width, 28 / trimmedLogo.height); const logoWidth = trimmedLogo.width * logoScale; const logoHeight = trimmedLogo.height * logoScale; pdf.addImage(trimmedLogo.data, trimmedLogo.format, margin, 14, logoWidth, logoHeight); } catch { /* optional logo */ } }
+  setFont('bold'); pdf.setFontSize(12); pdf.setTextColor(17, 24, 39); pdf.text('TRUSTY YELLOW CAB', right, 16, { align: 'right' });
+  setFont(); pdf.setFontSize(9); pdf.setTextColor(71, 85, 105); pdf.text(['COIMBATORE, TAMILNADU - 641007', '+91 422-3596446', 'trustyyellowcabs@gmail.com', 'www.trustyyellowcabs.in'], right, 21, { align: 'right', lineHeightFactor: 1.25 });
+  setFont('bold'); pdf.setFontSize(28); pdf.setTextColor(17, 24, 39); pdf.text('INVOICE', margin, 53); setFont(); pdf.setFontSize(9); pdf.setTextColor(71, 85, 105); pdf.text(`Invoice No: ${value(trip.trip_id)}`, margin, 60); pdf.text(`Date: ${formatIST(trip.created_at)}`, right, 48, { align: 'right' }); divider(69);
+
+  setFont('bold'); pdf.setFontSize(9); pdf.setTextColor(17, 24, 39); pdf.text('PASSENGER DETAILS', margin, 76); pdf.text('TRIP TIMINGS', right, 76, { align: 'right' }); setFont('bold'); pdf.setFontSize(12); pdf.text('Valued Customer', margin, 84); setFont(); pdf.setFontSize(10.5); pdf.text(`Mobile: ${value(trip.customer_phone)}`, margin, 91); pdf.text(`Start: ${formatIST(trip.started_at)}`, right, 84, { align: 'right' }); pdf.text(`End: ${formatIST(trip.completed_at)}`, right, 91, { align: 'right' }); divider(96);
+
+  setFont('bold'); pdf.setFontSize(9); pdf.text('TRIP ROUTE ADDRESSES', margin, 105); pdf.setFillColor(5, 150, 105); pdf.circle(margin + 4, 112, 1.5, 'F'); pdf.setFillColor(220, 38, 38); pdf.circle(margin + 4, 128, 1.5, 'F'); pdf.setDrawColor(71, 85, 105); pdf.setLineDashPattern([0.8, 1.1], 0); pdf.line(margin + 4, 114, margin + 4, 126); pdf.setLineDashPattern([], 0); label('Pickup Point', getTripPickupLocation(trip), margin + 11, 110, 171); label('Dropoff Point', getTripDropLocation(trip), margin + 11, 126, 171); divider(146);
+
+  box(margin, 151, 186, 25, [246, 247, 249]); setFont('bold'); pdf.setFontSize(12); pdf.setTextColor(17, 24, 39); pdf.text('VEHICLE DETAILS', margin + 6, 159); pdf.setFontSize(9); pdf.text('TOTAL DISTANCE', right - 6, 159, { align: 'right' }); setFont(); pdf.setFontSize(10.5); pdf.text(`Vehicle: ${value(trip.vehicle_category)}`, margin + 6, 166); pdf.text(`Reg No: ${value(trip.vehicle_number)}`, margin + 6, 171); pdf.setFontSize(19); pdf.setFont(font, 'bold'); pdf.text(trip.distance_km == null ? 'N/A' : `${trip.distance_km.toFixed(2)} KM`, right - 6, 166, { align: 'right' }); setFont(); pdf.setFontSize(10.5); pdf.text(`Duration: ${formatDuration(trip.duration_seconds)}`, right - 6, 171, { align: 'right' });
+  const isPackageTrip = trip.trip_type === 'PACKAGE' || trip.is_package;
+  if (isPackageTrip) { setFont(); pdf.setFontSize(6.5); pdf.setTextColor(100, 116, 139); pdf.text(`Package: ${value(trip.package_name)} | ${trip.included_km ?? 'N/A'} km / ${trip.included_minutes ?? 'N/A'} min`, right - 6, 174, { align: 'right' }); }
+
+  setFont('bold'); pdf.setFontSize(9); pdf.setTextColor(17, 24, 39); pdf.text('CHARGES BREAKDOWN', margin, 188); divider(192); let y = 200; items.forEach((item) => { setFont(); pdf.setFontSize(11); pdf.setTextColor(17, 24, 39); pdf.text(pdf.splitTextToSize(item.detail ? `${item.label} (${item.detail})` : item.label, 150), margin, y, { lineHeightFactor: 1.1 }); setFont('bold'); pdf.setFontSize(11); pdf.text(formatAmount(item.amount), right, y, { align: 'right' }); y += 7; }); if (!items.length) { setFont(); pdf.setFontSize(11); pdf.text('No saved fare breakdown available.', margin, y); }
+  setFont('bold'); pdf.setFontSize(8); pdf.setTextColor(17, 24, 39); pdf.text('Terms & Conditions', margin, 226); setFont(); pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); pdf.text(['The fare is based on travel distance and waiting time. Toll, parking and', 'permit charges may apply. Terms apply.', 'Fare includes additional charges for pickup or drop outside city limits.'], margin, 232, { lineHeightFactor: 1.5 });
+  box(110, 218, 88, 34, [246, 247, 249], true); setFont('bold'); pdf.setFontSize(12); pdf.setTextColor(17, 24, 39); pdf.text('GRAND TOTAL', 116, 231); setFont('bold'); pdf.setFontSize(17); pdf.text(formatAmount(trip.final_fare), 192, 231, { align: 'right' }); pdf.setDrawColor(226, 232, 240); pdf.line(116, 235, 192, 235); setFont('bold'); pdf.setFontSize(12); pdf.setTextColor(37, 99, 235); pdf.text('Balance Payable', 116, 246); pdf.setFontSize(17); pdf.text(formatAmount(trip.final_fare), 192, 246, { align: 'right' }); divider(266); setFont('bold'); pdf.setFontSize(9); pdf.setTextColor(17, 24, 39); pdf.text('THANK YOU FOR TRAVELLING WITH US', 105, 274, { align: 'center' }); setFont(); pdf.setFontSize(9); pdf.setTextColor(71, 85, 105); pdf.text('This is a computer-generated invoice. No physical signature is required.', 105, 281, { align: 'center' });
+
+  pdf.addPage(); setFont('bold'); pdf.setFontSize(15); pdf.setTextColor(17, 24, 39); pdf.text('Trusty Yellow Cabs Trusted & Verified Service', 11.5, 16); setFont(); pdf.setFontSize(10.5); pdf.text('Driver Profile - Passenger Safety Board', 11.5, 22.5); pdf.setDrawColor(209, 213, 219); pdf.line(11.5, 34.5, 198.5, 34.5); setFont('bold'); pdf.setFontSize(8.5); pdf.text('DRIVER PROFILE', 11.5, 44);
+  const photo = await loadImageData(driver?.photo_url); const photoX = 11.5; const photoY = 55; const photoWidth = 50; const photoHeight = 58; box(photoX, photoY, photoWidth, photoHeight, [255, 255, 255], true); if (photo) { try { const scale = Math.min((photoWidth - 2) / photo.width, (photoHeight - 2) / photo.height); const imageWidth = photo.width * scale; const imageHeight = photo.height * scale; pdf.addImage(photo.data, photo.format, photoX + (photoWidth - imageWidth) / 2, photoY + (photoHeight - imageHeight) / 2, imageWidth, imageHeight); } catch { /* failed image omitted */ } }
+  const profileX = 69; setFont('bold'); pdf.setFontSize(8.5); pdf.setTextColor(17, 24, 39); pdf.text('DRIVER NAME:', profileX, 60); setFont('bold'); pdf.setFontSize(11.5); pdf.text(driver?.driver_name || trip.driver_name || 'Unassigned', profileX, 66); setFont('bold'); pdf.setFontSize(8.5); pdf.text('VEHICLE MODEL & CATEGORY:', profileX, 77); setFont('bold'); pdf.setFontSize(11.5); pdf.text(value(trip.vehicle_category || driver?.vehicle_category), profileX, 83); setFont('bold'); pdf.setFontSize(8.5); pdf.text('VEHICLE REGISTRATION NO:', profileX, 93); setFont('bold'); pdf.setFontSize(11.5); pdf.text(value(trip.vehicle_number || driver?.vehicle_number), profileX, 99);
+  pdf.setDrawColor(209, 213, 219); pdf.line(11.5, 117, 198.5, 117); setFont('bold'); pdf.setFontSize(8.5); pdf.setTextColor(17, 24, 39); pdf.text('TRUSTY YELLOW CAB • OFFICIAL DETAILS', 11.5, 128); box(11.5, 137, 187, 66, [241, 242, 244], true); setFont('bold'); pdf.setFontSize(8.5); pdf.setTextColor(17, 24, 39); pdf.text('OFFICIAL TRANSPORT OPERATOR:', 19.5, 148); setFont('bold'); pdf.setFontSize(11); pdf.text('TRUSTY YELLOW CAB SERVICE (COIMBATORE)', 19.5, 154); setFont('bold'); pdf.setFontSize(8.5); pdf.text('REGISTERED ADDRESS:', 19.5, 164); setFont(); pdf.setFontSize(10.5); pdf.text('COIMBATORE, TAMILNADU, INDIA - 641007', 19.5, 170); setFont('bold'); pdf.setFontSize(8.5); pdf.text('CONTACT CHANNELS:', 19.5, 180); setFont(); pdf.setFontSize(10.5); pdf.text('Phone: +91 422-3596446  |  Email: trustyyellowcabs@gmail.com', 19.5, 186); pdf.text('Support website: www.trustyyellowcabs.in', 19.5, 192);
+  pdf.setDrawColor(209, 213, 219); pdf.line(11.5, 265, 198.5, 265); setFont('bold'); pdf.setFontSize(9.5); pdf.setTextColor(17, 24, 39); pdf.text('TRUSTY YELLOW CAB - WE CARE FOR YOUR SAFETY', 105, 273, { align: 'center' }); setFont(); pdf.setFontSize(8); pdf.setTextColor(71, 85, 105); pdf.text('Page 2 of 2 • Computer-generated verification of the driver’s identity and registration.', 105, 279, { align: 'center' }); return pdf;
 };
 
 type DateFilterPreset = 'ALL' | 'TODAY' | 'WEEK' | 'MONTH' | 'CUSTOM';
@@ -543,43 +624,73 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
     return drivers.find((d) => d.driver_id.trim().toUpperCase() === cleanDriverId || d.doc_id === t.driver_id) || null;
   };
 
-  const handleShareReceipt = async (t: FirestoreTrip) => {
+  const prepareReceiptFile = async (t: FirestoreTrip): Promise<{ blob: Blob; file: File; filename: string }> => {
+    const pdf = await createTripReceiptPdf(t, getReceiptDriver(t), parseFareBreakdown(t.finalized_fare_breakdown));
+    const blob = pdf.output('blob');
+    const filename = `trip_receipt_${(t.trip_id || 'trip').replace(/[^a-z0-9_-]/gi, '_')}.pdf`;
+    return { blob, file: new File([blob], filename, { type: 'application/pdf' }), filename };
+  };
+
+  const downloadReceiptFile = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const handleDownloadReceipt = async (t: FirestoreTrip) => {
     if (t.status !== 'COMPLETED') return;
     const tripKey = t.doc_id || t.trip_id;
     setSharingTripId(tripKey);
     setShareFeedback(null);
     try {
-      const pdf = await createTripReceiptPdf(t, getReceiptDriver(t), parseFareBreakdown(t.finalized_fare_breakdown));
-      const blob = pdf.output('blob');
-      const filename = `trip_receipt_${(t.trip_id || 'trip').replace(/[^a-z0-9_-]/gi, '_')}.pdf`;
-      const file = new File([blob], filename, { type: 'application/pdf' });
+      const { blob, filename } = await prepareReceiptFile(t);
+      downloadReceiptFile(blob, filename);
+      setShareFeedback({ tripId: tripKey, type: 'success', message: 'PDF downloaded successfully.' });
+    } catch (error) {
+      console.error('Failed to download trip receipt:', error);
+      setShareFeedback({ tripId: tripKey, type: 'error', message: 'Could not generate the receipt PDF.' });
+    } finally {
+      setSharingTripId(null);
+    }
+  };
+
+  const handleShareReceipt = async (t: FirestoreTrip) => {
+    if (t.status !== 'COMPLETED') return;
+    const tripKey = t.doc_id || t.trip_id;
+    const whatsappWindow = window.open('', '_blank');
+    setSharingTripId(tripKey);
+    setShareFeedback(null);
+    try {
+      const { blob, file, filename } = await prepareReceiptFile(t);
       const phone = getValidWhatsAppPhone(t.customer_phone);
       const message = `Hello ${t.customer_name || 'Customer'}, your Trusty Yellow Cabs receipt for trip ${t.trip_id} is ready.`;
-      const whatsappUrl = phone ? `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}` : '';
+      const whatsappUrl = phone ? `https://wa.me/${phone}?text=${encodeURIComponent(message)}` : '';
 
-      if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
         try {
           await navigator.share({ title: `Trip receipt ${t.trip_id}`, text: message, files: [file] });
-          setShareFeedback({ tripId: tripKey, type: 'success', message: 'Receipt shared successfully.' });
+          whatsappWindow?.close();
+          setShareFeedback({ tripId: tripKey, type: 'success', message: 'PDF ready to share.' });
           return;
         } catch (error) {
-          if (error instanceof DOMException && error.name === 'AbortError') return;
+          if (error instanceof DOMException && error.name === 'AbortError') { whatsappWindow?.close(); return; }
         }
       }
 
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = filename;
-      anchor.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      downloadReceiptFile(blob, filename);
       if (whatsappUrl) {
-        window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+        if (whatsappWindow) whatsappWindow.location.href = whatsappUrl;
+        else window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
         setShareFeedback({ tripId: tripKey, type: 'success', message: 'PDF downloaded. WhatsApp opened for manual attachment.' });
       } else {
+        whatsappWindow?.close();
         setShareFeedback({ tripId: tripKey, type: 'error', message: 'PDF downloaded. Customer mobile number is unavailable.' });
       }
     } catch (error) {
+      whatsappWindow?.close();
       console.error('Failed to create trip receipt:', error);
       setShareFeedback({ tripId: tripKey, type: 'error', message: 'Could not generate the receipt PDF.' });
     } finally {
@@ -1391,15 +1502,26 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                           </div>
                         </section>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => handleShareReceipt(t)}
-                        disabled={sharingTripId === tripKey}
-                        className="mt-3 inline-flex min-h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[13px] font-bold text-slate-800 transition hover:bg-slate-100 disabled:cursor-wait disabled:opacity-50"
-                      >
-                        <Share2 className="h-3.5 w-3.5" />
-                        {sharingTripId === tripKey ? 'Preparing PDF...' : 'Share PDF'}
-                      </button>
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadReceipt(t)}
+                          disabled={sharingTripId === tripKey}
+                          className="inline-flex min-h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-bold text-slate-800 transition hover:bg-slate-50 disabled:cursor-wait disabled:opacity-50"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          {sharingTripId === tripKey ? 'Preparing PDF...' : 'Download PDF'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleShareReceipt(t)}
+                          disabled={sharingTripId === tripKey}
+                          className="inline-flex min-h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[13px] font-bold text-slate-800 transition hover:bg-slate-100 disabled:cursor-wait disabled:opacity-50"
+                        >
+                          <Share2 className="h-3.5 w-3.5" />
+                          {sharingTripId === tripKey ? 'Preparing PDF...' : 'Share PDF'}
+                        </button>
+                      </div>
                       {shareFeedback?.tripId === tripKey && (
                         <p className={`mt-1 text-[11px] ${shareFeedback.type === 'error' ? 'text-rose-600' : 'text-emerald-700'}`}>
                           {shareFeedback.message}

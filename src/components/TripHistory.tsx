@@ -1,5 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { jsPDF } from 'jspdf';
 import { FirestoreTrip, FirestoreDriver, TripStatus } from '../types';
+import { formatPhoneNumberForWhatsApp } from '../services/otpMessaging';
 import {
   Download,
   MapPin,
@@ -25,6 +27,8 @@ import {
   Loader2,
   ChevronDown,
   ShieldCheck,
+  MoreVertical,
+  Share2,
 } from 'lucide-react';
 
 interface TripHistoryProps {
@@ -74,6 +78,112 @@ const getTripDropLocation = (trip: FirestoreTrip): string =>
     ? getLocationText(trip.actual_end_location) || trip.drop_location
     : trip.drop_location;
 
+type FareBreakdownItem = { label?: string; amount?: number | string; detail?: string };
+const parseFareBreakdown = (value: unknown): FareBreakdownItem[] => {
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    const items = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.items) ? parsed.items : [];
+    return items.filter((item): item is FareBreakdownItem => item && typeof item === 'object');
+  } catch {
+    return [];
+  }
+};
+const formatIST = (value: number | null | undefined): string => {
+  if (!value) return '—';
+  return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+};
+const formatDuration = (seconds: number | null | undefined): string => {
+  if (seconds === null || seconds === undefined || seconds < 0) return '—';
+  const total = Math.floor(seconds);
+  return `${String(Math.floor(total / 3600)).padStart(2, '0')}:${String(Math.floor((total % 3600) / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+};
+const formatAmount = (value: unknown): string => {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? `₹${amount.toFixed(2)}` : '—';
+};
+const getValidWhatsAppPhone = (phone?: string): string => {
+  const normalized = formatPhoneNumberForWhatsApp(phone);
+  return /^\d{10,15}$/.test(normalized) ? normalized : '';
+};
+
+const loadImageData = async (url?: string): Promise<string | null> => {
+  if (!url) return null;
+  if (url.startsWith('data:image/')) return url;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+};
+
+const createTripReceiptPdf = async (trip: FirestoreTrip, driver: FirestoreDriver | null, items: FareBreakdownItem[]): Promise<jsPDF> => {
+  const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
+  const margin = 16;
+  const pageWidth = 210;
+  const right = pageWidth - margin;
+  const text = (value: unknown) => String(value ?? '—');
+  const line = (y: number) => { pdf.setDrawColor(226, 232, 240); pdf.line(margin, y, right, y); };
+  const row = (label: string, value: unknown, y: number, valueColor = [51, 65, 85]) => {
+    pdf.setFontSize(9); pdf.setTextColor(100, 116, 139); pdf.text(label, margin, y);
+    pdf.setTextColor(valueColor[0], valueColor[1], valueColor[2]); pdf.text(pdf.splitTextToSize(text(value), 105), right, y, { align: 'right' });
+  };
+
+  pdf.setFillColor(245, 158, 11); pdf.rect(0, 0, pageWidth, 8, 'F');
+  pdf.setTextColor(15, 23, 42); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(20); pdf.text('TRUSTY YELLOW CABS', margin, 23);
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(71, 85, 105); pdf.text('Chennai, Tamil Nadu  |  trustyyellowcabs@gmail.com', margin, 29);
+  pdf.setTextColor(15, 23, 42); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(15); pdf.text('TRIP RECEIPT', right, 23, { align: 'right' });
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); pdf.text(`Invoice: ${trip.trip_id}`, right, 29, { align: 'right' });
+  line(35);
+
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(15, 23, 42); pdf.text('TRIP SUMMARY', margin, 44);
+  row('Invoice date', formatIST(trip.created_at), 52); row('Passenger', trip.customer_name, 59); row('Mobile', trip.customer_phone, 66);
+  row('Start time', formatIST(trip.started_at), 73); row('End time', formatIST(trip.completed_at), 80);
+  line(87);
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(15, 23, 42); pdf.text('JOURNEY', margin, 96);
+  row('Pickup', getTripPickupLocation(trip), 104); row('Drop', getTripDropLocation(trip), 114);
+  row('Vehicle', `${trip.vehicle_category || '—'}  |  ${trip.vehicle_number || '—'}`, 124);
+  const isPackageTrip = trip.trip_type === 'PACKAGE' || trip.is_package;
+  const journeyOffset = isPackageTrip ? 14 : 0;
+  if (isPackageTrip) {
+    row('Package', trip.package_name, 131);
+    row('Included', `${trip.included_km ?? '—'} km  |  ${trip.included_minutes ?? '—'} min`, 138);
+  }
+  row('Distance', trip.distance_km == null ? '—' : `${trip.distance_km.toFixed(2)} km`, 131 + journeyOffset);
+  row('Duration', formatDuration(trip.duration_seconds), 138 + journeyOffset);
+  line(145 + journeyOffset);
+  const fareHeadingY = 154 + journeyOffset;
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(15, 23, 42); pdf.text('FARE BREAKDOWN', margin, fareHeadingY);
+  let y = fareHeadingY + 9;
+  items.forEach((item) => {
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(51, 65, 85); pdf.text(text(item.label || 'Adjustment'), margin, y);
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); if (item.detail) pdf.text(pdf.splitTextToSize(item.detail, 115), margin + 2, y + 4);
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(51, 65, 85); pdf.text(formatAmount(item.amount), right, y, { align: 'right' });
+    y += item.detail ? 11 : 7;
+  });
+  if (!items.length) { pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); pdf.text('No saved fare breakdown available.', margin, y); y += 8; }
+  line(Math.min(y + 1, 258)); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(14); pdf.setTextColor(22, 101, 52); pdf.text('Total Payable', margin, Math.min(y + 12, 270)); pdf.text(formatAmount(trip.final_fare), right, Math.min(y + 12, 270), { align: 'right' });
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(100, 116, 139); pdf.text('Terms: This receipt reflects the saved completed-trip fare. Please retain it for your records.', margin, 284);
+
+  pdf.addPage(); pdf.setFillColor(245, 158, 11); pdf.rect(0, 0, pageWidth, 8, 'F'); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(20); pdf.setTextColor(15, 23, 42); pdf.text('DRIVER PROFILE', margin, 28);
+  const photo = await loadImageData(driver?.photo_url || driver?.profile_photo_url);
+  if (photo) { try { pdf.addImage(photo, photo.startsWith('data:image/png') ? 'PNG' : 'JPEG', margin, 40, 35, 35); } catch { /* unsupported image format */ } }
+  const profileX = photo ? margin + 45 : margin;
+  pdf.setFontSize(16); pdf.setTextColor(15, 23, 42); pdf.text(driver?.driver_name || trip.driver_name || 'Unassigned', profileX, 49);
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10); pdf.setTextColor(71, 85, 105); pdf.text(`Driver ID: ${trip.driver_id || driver?.driver_id || '—'}`, profileX, 57); pdf.text(`Vehicle: ${trip.vehicle_category || driver?.vehicle_category || '—'}`, profileX, 64); pdf.text(`Registration: ${trip.vehicle_number || driver?.vehicle_number || '—'}`, profileX, 71);
+  line(91); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11); pdf.setTextColor(15, 23, 42); pdf.text('OFFICIAL COMPANY INFORMATION', margin, 103); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10); pdf.setTextColor(71, 85, 105); pdf.text(['Trusty Yellow Cabs', 'Chennai, Tamil Nadu', 'trustyyellowcabs@gmail.com', 'Thank you for choosing Trusty Yellow Cabs.'], margin, 114, { lineHeightFactor: 1.8 });
+  pdf.setFontSize(8); pdf.setTextColor(148, 163, 184); pdf.text('Generated securely on this device from the existing trip record.', margin, 280);
+  return pdf;
+};
+
 type DateFilterPreset = 'ALL' | 'TODAY' | 'WEEK' | 'MONTH' | 'CUSTOM';
 
 const TRIPS_PER_PAGE = 25;
@@ -101,6 +211,10 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
 }) => {
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
   const [tripToDelete, setTripToDelete] = useState<FirestoreTrip | null>(null);
+  const [openTripMenuId, setOpenTripMenuId] = useState<string | null>(null);
+  const [expandedCompletedTripId, setExpandedCompletedTripId] = useState<string | null>(null);
+  const [sharingTripId, setSharingTripId] = useState<string | null>(null);
+  const [shareFeedback, setShareFeedback] = useState<{ tripId: string; type: 'success' | 'error'; message: string } | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -342,6 +456,50 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
           (cleanVeh && d.vehicle_number.trim().toUpperCase().replace(/\s+/g, '') === cleanVeh)
       ) || null
     );
+  };
+
+  const handleShareReceipt = async (t: FirestoreTrip) => {
+    if (t.status !== 'COMPLETED') return;
+    const tripKey = t.doc_id || t.trip_id;
+    setSharingTripId(tripKey);
+    setShareFeedback(null);
+    try {
+      const pdf = await createTripReceiptPdf(t, getDriverForTrip(t), parseFareBreakdown(t.finalized_fare_breakdown));
+      const blob = pdf.output('blob');
+      const filename = `trip_receipt_${(t.trip_id || 'trip').replace(/[^a-z0-9_-]/gi, '_')}.pdf`;
+      const file = new File([blob], filename, { type: 'application/pdf' });
+      const phone = getValidWhatsAppPhone(t.customer_phone);
+      const message = `Hello ${t.customer_name || 'Customer'}, your Trusty Yellow Cabs receipt for trip ${t.trip_id} is ready.`;
+      const whatsappUrl = phone ? `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}` : '';
+
+      if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+        try {
+          await navigator.share({ title: `Trip receipt ${t.trip_id}`, text: message, files: [file] });
+          setShareFeedback({ tripId: tripKey, type: 'success', message: 'Receipt shared successfully.' });
+          return;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError') return;
+        }
+      }
+
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      if (whatsappUrl) {
+        window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+        setShareFeedback({ tripId: tripKey, type: 'success', message: 'PDF downloaded. WhatsApp opened for manual attachment.' });
+      } else {
+        setShareFeedback({ tripId: tripKey, type: 'error', message: 'PDF downloaded. Customer mobile number is unavailable.' });
+      }
+    } catch (error) {
+      console.error('Failed to create trip receipt:', error);
+      setShareFeedback({ tripId: tripKey, type: 'error', message: 'Could not generate the receipt PDF.' });
+    } finally {
+      setSharingTripId(null);
+    }
   };
 
   const handleOpenDriverFeeModal = (t: FirestoreTrip) => {
@@ -1035,22 +1193,26 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
           </div>
         ) : true ? (
           /* Cards Grid View (Responsive & Touch-Friendly) */
-          <div className="grid grid-cols-1 gap-3 bg-slate-50/50 p-3">
+          <div className="grid grid-cols-1 gap-4 bg-slate-50/50 p-2 sm:p-3 md:grid-cols-2">
             {paginatedTrips.map((t) => {
               const driverForTrip = getDriverForTrip(t);
               const createdAt = new Date(t.created_at);
+              const tripKey = t.doc_id || t.trip_id;
+              const isCompleted = t.status === 'COMPLETED';
+              const fareBreakdown = parseFareBreakdown(t.finalized_fare_breakdown);
+              const isPackageTrip = t.trip_type === 'PACKAGE' || t.is_package;
 
               return (
                 <article
                   key={t.doc_id || t.trip_id}
-                  className="flex min-w-0 flex-col rounded-xl border border-slate-200 bg-white p-3 sm:p-4"
+                  className="relative flex min-h-[390px] min-w-0 flex-col rounded-[22px] border border-slate-200/80 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.07)] transition-shadow hover:shadow-[0_12px_30px_rgba(15,23,42,0.11)] sm:p-5"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <h3 className="break-words text-sm font-bold text-slate-950">
+                      <h3 className="break-words text-[15px] font-bold text-slate-950">
                         #{t.trip_id.replace(/^TRIP-?/, '')} · {t.vehicle_category || 'Mini'}
                       </h3>
-                      <p className="mt-1 text-xs text-slate-500">
+                      <p className="mt-1 text-[13px] text-slate-500">
                         {createdAt.toLocaleDateString('en-GB', {
                           day: '2-digit',
                           month: 'short',
@@ -1066,46 +1228,46 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                     <div className="shrink-0 pt-0.5">{getStatusBadge(t.status)}</div>
                   </div>
 
-                  <div className="mt-2 min-w-0">
-                    <p className="break-words text-sm font-semibold text-slate-950">{t.customer_name}</p>
+                  <div className="mt-4 min-w-0 border-t border-slate-100 pt-3">
+                    <p className="break-words text-[14px] font-semibold text-slate-950">{t.customer_name}</p>
                     <a
                       href={`tel:${t.customer_phone}`}
-                      className="mt-0.5 inline-block text-xs text-amber-800 hover:underline"
+                      className="mt-0.5 inline-block text-[13px] text-slate-700 hover:underline"
                     >
                       {t.customer_phone}
                     </a>
                   </div>
 
-                  <dl className="mt-3 space-y-1.5 text-xs">
+                  <dl className="mt-4 space-y-3 text-[13px]">
                     <div className="flex items-start gap-3">
-                      <dt className="w-14 shrink-0 pt-0.5 font-medium text-slate-500">Pickup</dt>
+                      <dt className="w-16 shrink-0 pt-0.5 font-medium text-slate-600">Pickup</dt>
                       <dd className="min-w-0 break-words leading-relaxed text-slate-800">
                         {getTripPickupLocation(t)}
                       </dd>
                     </div>
                     <div className="flex items-start gap-3">
-                      <dt className="w-14 shrink-0 pt-0.5 font-medium text-slate-500">Drop</dt>
+                      <dt className="w-16 shrink-0 pt-0.5 font-medium text-slate-600">Drop</dt>
                       <dd className="min-w-0 break-words leading-relaxed text-slate-800">
                         {getTripDropLocation(t)}
                       </dd>
                     </div>
                   </dl>
 
-                  <dl className="mt-3 space-y-2 text-xs">
+                  <dl className="mt-4 space-y-2.5 border-t border-slate-100 pt-3 text-[13px]">
                     <div className="flex items-start justify-between gap-3">
-                      <dt className="shrink-0 text-slate-500">Fare</dt>
-                      <dd className="text-right text-base font-bold text-slate-950 tabular-nums">
+                      <dt className="shrink-0 font-medium text-slate-600">Fare</dt>
+                      <dd className="text-right text-base font-bold text-emerald-700 tabular-nums">
                         ₹{getTripFare(t)}
                       </dd>
                     </div>
                     <div className="flex items-start justify-between gap-3">
-                      <dt className="shrink-0 text-slate-500">Distance</dt>
+                      <dt className="shrink-0 font-medium text-slate-600">Distance</dt>
                       <dd className="text-right text-slate-800 tabular-nums">
-                        {getTripDistance(t) !== null ? `${getTripDistance(t)} km` : '—'}
+                        {getTripDistance(t) !== null ? `${getTripDistance(t)!.toFixed(2)} km` : '—'}
                       </dd>
                     </div>
                     <div className="flex items-start justify-between gap-3">
-                      <dt className="shrink-0 text-slate-500">Driver</dt>
+                      <dt className="shrink-0 font-medium text-slate-600">Driver</dt>
                       <dd className="min-w-0 break-words text-right text-slate-800">
                         {t.driver_name || driverForTrip?.driver_name || 'Unassigned'}
                         {(t.vehicle_number || driverForTrip?.vehicle_number) && (
@@ -1117,12 +1279,56 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                     </div>
                   </dl>
 
-                  <div className="mt-3 grid grid-cols-3 gap-2 pt-1">
+                  {isCompleted && (
+                    <div className="mt-4 border-t border-slate-100 pt-3">
+                      <button type="button" onClick={() => setExpandedCompletedTripId(expandedCompletedTripId === tripKey ? null : tripKey)} className="min-h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[13px] font-bold text-slate-800 transition hover:bg-slate-100">
+                        {expandedCompletedTripId === tripKey ? 'Hide Details' : 'View Details'}
+                      </button>
+                      {expandedCompletedTripId === tripKey && (
+                        <section className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-[13px] text-slate-800" aria-label="Completed trip receipt details">
+                          <div className="grid grid-cols-1 gap-x-5 gap-y-2 sm:grid-cols-2">
+                            <div><span className="font-medium text-slate-500">Trip ID</span><p className="font-semibold">{t.trip_id}</p></div>
+                            <div><span className="font-medium text-slate-500">Customer</span><p className="font-semibold">{t.customer_name || '—'}</p></div>
+                            <div><span className="font-medium text-slate-500">Driver / ID</span><p className="font-semibold">{t.driver_name || '—'}{t.driver_id ? ` / ${t.driver_id}` : ''}</p></div>
+                            <div><span className="font-medium text-slate-500">Vehicle</span><p className="font-semibold">{t.vehicle_number || '—'} · {t.vehicle_category || '—'}</p></div>
+                            <div><span className="font-medium text-slate-500">Date</span><p>{formatIST(t.created_at)}</p></div>
+                            <div><span className="font-medium text-slate-500">Start / End</span><p>{formatIST(t.started_at)} / {formatIST(t.completed_at)}</p></div>
+                            <div className="sm:col-span-2"><span className="font-medium text-slate-500">Pickup</span><p className="break-words">{getTripPickupLocation(t) || '—'}</p></div>
+                            <div className="sm:col-span-2"><span className="font-medium text-slate-500">Drop</span><p className="break-words">{getTripDropLocation(t) || '—'}</p></div>
+                            <div><span className="font-medium text-slate-500">Distance</span><p>{getTripDistance(t) === null ? '—' : `${getTripDistance(t)!.toFixed(2)} km`}</p></div>
+                            <div><span className="font-medium text-slate-500">Duration</span><p>{formatDuration(t.duration_seconds)}</p></div>
+                          </div>
+                          <div className="mt-3 border-t border-slate-200 pt-3">
+                            <h4 className="font-bold text-slate-900">Fare Breakdown</h4>
+                            {isPackageTrip && <div className="mt-2 grid grid-cols-2 gap-2 text-[12px] sm:grid-cols-3"><div><span className="text-slate-500">Package</span><p className="font-medium">{t.package_name || '—'}</p></div><div><span className="text-slate-500">Included KM</span><p className="font-medium">{t.included_km ?? '—'}</p></div><div><span className="text-slate-500">Included Minutes</span><p className="font-medium">{t.included_minutes ?? '—'}</p></div></div>}
+                            {fareBreakdown.length > 0 ? <div className="mt-2 space-y-2">{fareBreakdown.map((item, index) => <div key={`${item.label || 'item'}-${index}`} className="flex items-start justify-between gap-3 border-b border-slate-200/70 pb-2 last:border-0 last:pb-0"><div className="min-w-0"><p className="font-medium text-slate-800">{item.label || 'Adjustment'}</p>{item.detail && <p className="break-words text-[12px] text-slate-500">{item.detail}</p>}</div><span className="shrink-0 font-semibold tabular-nums">{formatAmount(item.amount)}</span></div>)}</div> : <p className="mt-2 text-[12px] text-slate-500">No saved fare breakdown available.</p>}
+                            <div className="mt-3 flex items-center justify-between border-t border-slate-300 pt-3 text-[15px] font-bold"><span>Total Payable</span><span className="text-emerald-700">{formatAmount(t.final_fare)}</span></div>
+                          </div>
+                        </section>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleShareReceipt(t)}
+                        disabled={sharingTripId === tripKey}
+                        className="mt-3 inline-flex min-h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[13px] font-bold text-slate-800 transition hover:bg-slate-100 disabled:cursor-wait disabled:opacity-50"
+                      >
+                        <Share2 className="h-3.5 w-3.5" />
+                        {sharingTripId === tripKey ? 'Preparing PDF...' : 'Share PDF'}
+                      </button>
+                      {shareFeedback?.tripId === tripKey && (
+                        <p className={`mt-1 text-[11px] ${shareFeedback.type === 'error' ? 'text-rose-600' : 'text-emerald-700'}`}>
+                          {shareFeedback.message}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="relative mt-auto grid grid-cols-[1fr_1fr_auto] gap-2 border-t border-slate-100 pt-4">
                     {(t.driver_id || driverForTrip) && onSetDriverOfficeDue && (
                       <button
                         type="button"
                         onClick={() => handleOpenDriverFeeModal(t)}
-                        className="min-h-10 rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                        className="min-h-10 rounded-xl border border-slate-200 bg-white px-2 py-2 text-[13px] font-bold text-slate-900 transition hover:bg-slate-50"
                       >
                         Edit Office Fee
                       </button>
@@ -1131,18 +1337,13 @@ export const TripHistory: React.FC<TripHistoryProps> = ({
                       <button
                         type="button"
                         onClick={() => onOpenEditTrip(t)}
-                        className="min-h-10 rounded-lg bg-amber-400 px-2 py-2 text-xs font-medium text-slate-950 transition hover:bg-amber-300"
+                        className="min-h-10 rounded-xl bg-slate-900 px-2 py-2 text-[13px] font-bold text-white transition hover:bg-slate-700"
                       >
                         Edit Trip
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => setTripToDelete(t)}
-                      className="min-h-10 rounded-lg border border-rose-300 bg-white px-2 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-50"
-                    >
-                      Delete Record
-                    </button>
+                    <button type="button" onClick={() => setOpenTripMenuId(openTripMenuId === (t.doc_id || t.trip_id) ? null : (t.doc_id || t.trip_id))} className="min-h-10 w-10 rounded-xl border border-slate-200 bg-white text-slate-900 transition hover:bg-slate-50" aria-label={`More actions for trip ${t.trip_id}`}><MoreVertical className="mx-auto h-4 w-4" /></button>
+                    {openTripMenuId === (t.doc_id || t.trip_id) && <div className="absolute bottom-14 right-0 z-20 w-40 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl"><button type="button" onClick={() => { setTripToDelete(t); setOpenTripMenuId(null); }} className="block w-full rounded-lg px-3 py-2 text-left text-[13px] font-medium text-rose-700 hover:bg-rose-50">Delete Record</button></div>}
                   </div>
                 </article>
               );

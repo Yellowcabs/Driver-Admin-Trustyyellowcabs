@@ -356,6 +356,7 @@ function AdminApplication({ onSessionEnded }: { onSessionEnded: () => void }) {
     registerDriver,
     generateDriverId,
     updateDriver,
+    updateDriverSubscriptionExpiryOnly,
     toggleDriverStatus,
     resetDriverDeviceBinding,
     deleteDriver,
@@ -642,6 +643,7 @@ function AdminApplication({ onSessionEnded }: { onSessionEnded: () => void }) {
                 onResetDeviceBinding={resetDriverDeviceBinding}
                 onDeleteDriver={deleteDriver}
                 onUpdateDriver={updateDriver}
+                onUpdateSubscriptionExpiry={updateDriverSubscriptionExpiryOnly}
                 onCleanDriversTable={cleanDriversTable}
                 onSetDriverOfficeDue={setDriverOfficeDue}
                 onClearDriverOfficeDue={clearDriverOfficeDue}

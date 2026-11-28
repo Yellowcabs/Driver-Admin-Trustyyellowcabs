@@ -19,6 +19,7 @@ import {
   serverTimestamp,
   runTransaction,
   writeBatch,
+  Timestamp,
 } from 'firebase/firestore';
 import { FirestoreDriver, FirestoreTrip, SystemControlSettings, FirebaseConnectionConfig, DriverStatus, CustomerTrackingSession, FareRateCard } from '../types';
 import { DEFAULT_FIREBASE_CONFIG } from '../data/seedData';
@@ -238,6 +239,12 @@ export function subscribeToFirestoreDrivers(
         office_upi_id: data.office_upi_id !== undefined ? String(data.office_upi_id).trim() : (data.upi_id ? String(data.upi_id).trim() : ''),
         driver_payment_status: data.driver_payment_status || (data.payment_status === 'CLEARED' ? 'VERIFIED' : undefined),
         payment_updated_at: typeof data.payment_updated_at === 'number' ? data.payment_updated_at : undefined,
+        subscription_plan: data.subscription_plan || '',
+        subscription_status: data.subscription_status || '',
+        subscription_start_at: data.subscription_start_at,
+        subscription_expires_at: data.subscription_expires_at,
+        subscription_payment_id: data.subscription_payment_id || '',
+        subscription_updated_at: data.subscription_updated_at,
         updated_at: data.updated_at,
       };
     };
@@ -379,6 +386,10 @@ function parseFirestoreTripDoc(docSnap: any): FirestoreTrip {
     distance_km: typeof data.distance_km === 'number' ? data.distance_km : undefined,
     duration_seconds: typeof data.duration_seconds === 'number' ? data.duration_seconds : undefined,
     waiting_seconds: typeof data.waiting_seconds === 'number' ? data.waiting_seconds : undefined,
+    finalized_fare_breakdown: typeof data.finalized_fare_breakdown === 'string' ? data.finalized_fare_breakdown : undefined,
+    package_name: typeof data.package_name === 'string' ? data.package_name : undefined,
+    included_km: typeof data.included_km === 'number' ? data.included_km : undefined,
+    included_minutes: typeof data.included_minutes === 'number' ? data.included_minutes : undefined,
     tracking_token: data.tracking_token || undefined,
     tracking_enabled: typeof data.tracking_enabled === 'boolean' ? data.tracking_enabled : undefined,
     tracking_created_at: typeof data.tracking_created_at === 'number' ? data.tracking_created_at : undefined,
@@ -586,6 +597,26 @@ export async function upsertDriverInFirestore(config: FirebaseConnectionConfig, 
     return true;
   } catch (err) {
     console.error('Error writing driver to Firestore:', err);
+    return false;
+  }
+}
+
+/** Updates only the existing subscription expiry field. */
+export async function updateDriverSubscriptionExpiry(
+  config: FirebaseConnectionConfig,
+  driverId: string,
+  expiresAt: Date,
+  docId?: string
+): Promise<boolean> {
+  try {
+    const { db } = getOrCreateFirebaseInstance(config);
+    if (!db) return false;
+    await updateDoc(doc(db, 'drivers', docId || driverId), {
+      subscription_expires_at: Timestamp.fromDate(expiresAt),
+    });
+    return true;
+  } catch (err) {
+    console.error('Error updating subscription expiry in Firestore:', err);
     return false;
   }
 }
@@ -1509,6 +1540,10 @@ export function subscribeToCustomerTrackingSession(
         otp: liveTData.otp ? String(liveTData.otp) : null,
         distance_km: typeof liveTData.distance_km === 'number' ? liveTData.distance_km : undefined,
         duration_seconds: typeof liveTData.duration_seconds === 'number' ? liveTData.duration_seconds : undefined,
+        finalized_fare_breakdown: typeof liveTData.finalized_fare_breakdown === 'string' ? liveTData.finalized_fare_breakdown : undefined,
+        package_name: typeof liveTData.package_name === 'string' ? liveTData.package_name : undefined,
+        included_km: typeof liveTData.included_km === 'number' ? liveTData.included_km : undefined,
+        included_minutes: typeof liveTData.included_minutes === 'number' ? liveTData.included_minutes : undefined,
         waiting_seconds: typeof liveTData.waiting_seconds === 'number' ? liveTData.waiting_seconds : undefined,
         tracking_token: liveTData.tracking_token,
         tracking_enabled: liveTData.tracking_enabled,

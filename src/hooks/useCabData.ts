@@ -27,6 +27,7 @@ import {
   subscribeToFirestoreFareRates,
   upsertFareRateInFirestore,
   upsertDriverInFirestore,
+  updateDriverSubscriptionExpiry,
   deleteDriverFromFirestore,
   upsertTripInFirestore,
   assignDriverToTripAtomically,
@@ -995,6 +996,21 @@ export function useCabData() {
     [isFirebaseConnected, firebaseConfig, addLog]
   );
 
+  const updateDriverSubscriptionExpiryOnly = useCallback(
+    async (driverId: string, expiresAt: Date) => {
+      const existing = driversRef.current.find((driver) => driver.driver_id === driverId);
+      if (!existing) throw new Error('Driver not found. Refresh and try again.');
+      if (isFirebaseConnected) {
+        const saved = await updateDriverSubscriptionExpiry(firebaseConfig, driverId, expiresAt, existing.doc_id);
+        if (!saved) throw new Error('Subscription expiry update failed in Firestore.');
+      }
+      const updatedDriver = { ...existing, subscription_expires_at: expiresAt };
+      setDrivers((prev) => prev.map((driver) => driver.driver_id === driverId ? updatedDriver : driver));
+      addLog('INFO', 'ADMIN', 'Subscription Validity Updated', `Subscription expiry for ${driverId} updated.`);
+    },
+    [isFirebaseConnected, firebaseConfig, addLog]
+  );
+
   const toggleDriverStatus = useCallback(
     async (driverId: string) => {
       const trimmedId = (driverId || '').trim().toLowerCase();
@@ -1364,6 +1380,7 @@ export function useCabData() {
     registerDriver,
     generateDriverId,
     updateDriver,
+    updateDriverSubscriptionExpiryOnly,
     toggleDriverStatus,
     resetDriverDeviceBinding,
     deleteDriver,

@@ -49,6 +49,12 @@ export interface FirestoreDriver {
   upi_id?: string;
   driver_payment_status?: 'VERIFIED' | string;
   payment_updated_at?: number;
+  subscription_plan?: string;
+  subscription_status?: string;
+  subscription_start_at?: any;
+  subscription_expires_at?: any;
+  subscription_payment_id?: string;
+  subscription_updated_at?: any;
   updated_at?: any;
 }
 
@@ -108,6 +114,10 @@ export interface FirestoreTrip {
   tracking_token?: string;
   tracking_enabled?: boolean;
   tracking_created_at?: number;
+  finalized_fare_breakdown?: string;
+  package_name?: string;
+  included_km?: number;
+  included_minutes?: number;
 }
 
 export interface CustomerTrackingSession {

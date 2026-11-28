@@ -35,6 +35,10 @@ import {
   User,
   ChevronDown,
   RotateCcw,
+  MoreVertical,
+  CarFront,
+  CalendarDays,
+  Timer,
 } from 'lucide-react';
 
 interface DriverManagementProps {
@@ -44,6 +48,7 @@ interface DriverManagementProps {
   onResetDeviceBinding: (driverId: string) => Promise<void>;
   onDeleteDriver: (driverId: string) => Promise<void>;
   onUpdateDriver: (driverId: string, data: Partial<FirestoreDriver>) => Promise<void>;
+  onUpdateSubscriptionExpiry: (driverId: string, expiresAt: Date) => Promise<void>;
   onCleanDriversTable?: () => Promise<{
     totalScanned: number;
     fieldsCleaned: number;
@@ -61,7 +66,40 @@ interface DriverManagementProps {
   globalSearchQuery: string;
 }
 
-const DRIVERS_PER_PAGE = 10;
+const DRIVERS_PER_PAGE = 12;
+
+type SubscriptionValidity = 'ACTIVE' | 'EXPIRED' | 'NONE';
+const asDate = (value: any): Date | null => {
+  if (!value) return null;
+  if (typeof value?.toDate === 'function') return value.toDate();
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+const getSubscriptionValidity = (driver: FirestoreDriver, now: number): SubscriptionValidity => {
+  const expiresAt = asDate(driver.subscription_expires_at);
+  return !expiresAt ? 'NONE' : expiresAt.getTime() > now ? 'ACTIVE' : 'EXPIRED';
+};
+const formatKolkataDate = (value: any): string => {
+  const date = asDate(value);
+  return date ? new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }).format(date) : '—';
+};
+const formatKolkataInput = (value: any): string => {
+  const date = asDate(value);
+  if (!date) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(date).reduce<Record<string, string>>((result, part) => ({ ...result, [part.type]: part.value }), {});
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+};
+const parseKolkataInput = (value: string): Date => new Date(`${value}:00+05:30`);
+const remainingValidity = (value: any, now: number): string => {
+  const expiresAt = asDate(value);
+  if (!expiresAt) return '—';
+  const diff = expiresAt.getTime() - now;
+  if (diff <= 0) return 'Expired';
+  const minutes = Math.floor(diff / 60000);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  return days ? `${days}d ${hours}h` : `${hours}h ${minutes % 60}m`;
+};
 
 export const DEFAULT_PAYMENT_NOTE = 'Trip CC (Convenience Charge)';
 
@@ -79,6 +117,7 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
   onResetDeviceBinding,
   onDeleteDriver,
   onUpdateDriver,
+  onUpdateSubscriptionExpiry,
   onCleanDriversTable,
   onSetDriverOfficeDue,
   onClearDriverOfficeDue,
@@ -87,7 +126,6 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
 }) => {
   const [statusFilter, setStatusFilter] = useState<string>('ONLINE');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
-  const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [editingDriver, setEditingDriver] = useState<FirestoreDriver | null>(null);
@@ -97,6 +135,42 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
   const [driverToDelete, setDriverToDelete] = useState<FirestoreDriver | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [viewingPhoto, setViewingPhoto] = useState<string | null>(null);
+  const [openDriverMenuId, setOpenDriverMenuId] = useState<string | null>(null);
+  const [validityDriver, setValidityDriver] = useState<FirestoreDriver | null>(null);
+  const [validityInput, setValidityInput] = useState('');
+  const [isSavingValidity, setIsSavingValidity] = useState(false);
+  const [validityFeedback, setValidityFeedback] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const openValidityEditor = (driver: FirestoreDriver) => {
+    setValidityDriver(driver);
+    setValidityInput(formatKolkataInput(driver.subscription_expires_at));
+    setValidityFeedback(null);
+  };
+  const saveValidity = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!validityDriver || !validityInput) return;
+    const expiresAt = parseKolkataInput(validityInput);
+    if (Number.isNaN(expiresAt.getTime())) {
+      setValidityFeedback('Enter a valid date and time.');
+      return;
+    }
+    setIsSavingValidity(true);
+    setValidityFeedback(null);
+    try {
+      await onUpdateSubscriptionExpiry(validityDriver.driver_id, expiresAt);
+      setValidityDriver(null);
+    } catch (error: any) {
+      setValidityFeedback(error?.message || 'Could not update subscription expiry.');
+    } finally {
+      setIsSavingValidity(false);
+    }
+  };
 
   // Office Dues Management State (Clean Step-by-Step UI)
   const [managingDueDriver, setManagingDueDriver] = useState<FirestoreDriver | null>(null);
@@ -167,6 +241,9 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
   const blockedDrivers = useMemo(() => drivers.filter((d) => d.status === 'BLOCKED'), [drivers]);
   const driversWithDue = useMemo(() => drivers.filter((d) => (d.payment_amount || 0) > 0), [drivers]);
   const totalDueAmount = useMemo(() => drivers.reduce((sum, d) => sum + (d.payment_amount || 0), 0), [drivers]);
+  const activeSubscriptions = useMemo(() => drivers.filter((d) => getSubscriptionValidity(d, now) === 'ACTIVE'), [drivers, now]);
+  const expiredSubscriptions = useMemo(() => drivers.filter((d) => getSubscriptionValidity(d, now) === 'EXPIRED'), [drivers, now]);
+  const noSubscriptions = useMemo(() => drivers.filter((d) => getSubscriptionValidity(d, now) === 'NONE'), [drivers, now]);
 
   // Filter drivers - memoized to prevent lag when interacting with UI
   const filteredDrivers = useMemo(() => {
@@ -176,6 +253,9 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
       if (statusFilter === 'ACTIVE' && drv.status !== 'ACTIVE') return false;
       if (statusFilter === 'BLOCKED' && drv.status !== 'BLOCKED') return false;
       if (statusFilter === 'WITH_DUES' && (!drv.payment_amount || drv.payment_amount <= 0)) return false;
+      if (statusFilter === 'SUB_ACTIVE' && getSubscriptionValidity(drv, now) !== 'ACTIVE') return false;
+      if (statusFilter === 'SUB_EXPIRED' && getSubscriptionValidity(drv, now) !== 'EXPIRED') return false;
+      if (statusFilter === 'SUB_NONE' && getSubscriptionValidity(drv, now) !== 'NONE') return false;
       if (categoryFilter !== 'ALL') {
         const drvCat = (drv.vehicle_category || '').trim().toUpperCase();
         const filterCat = categoryFilter.trim().toUpperCase();
@@ -193,7 +273,7 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
 
       return true;
     });
-  }, [drivers, statusFilter, categoryFilter, searchQuery, globalSearchQuery]);
+  }, [drivers, statusFilter, categoryFilter, searchQuery, globalSearchQuery, now]);
 
   // Pagination for 2000+ drivers
   const totalPages = Math.ceil(filteredDrivers.length / DRIVERS_PER_PAGE) || 1;
@@ -382,11 +462,24 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
         </div>
       </div>
 
+      <div className="grid grid-cols-3 gap-2.5 sm:gap-4">
+        {[
+          { id: 'SUB_ACTIVE', label: 'Active Subscriptions', count: activeSubscriptions.length, color: 'emerald' },
+          { id: 'SUB_EXPIRED', label: 'Expired Subscriptions', count: expiredSubscriptions.length, color: 'rose' },
+          { id: 'SUB_NONE', label: 'No Subscription', count: noSubscriptions.length, color: 'slate' },
+        ].map((summary) => (
+          <button key={summary.id} type="button" onClick={() => setStatusFilter(statusFilter === summary.id ? 'ALL' : summary.id)} className={`rounded-lg border bg-white p-3 text-left transition sm:p-4 ${statusFilter === summary.id ? (summary.color === 'emerald' ? 'border-emerald-500 ring-2 ring-emerald-500/20' : summary.color === 'rose' ? 'border-rose-500 ring-2 ring-rose-500/20' : 'border-slate-500 ring-2 ring-slate-500/20') : 'border-slate-200/80 hover:border-slate-300'}`}>
+            <p className="text-[10px] font-semibold uppercase leading-tight tracking-wider text-slate-500 sm:text-xs">{summary.label}</p>
+            <span className={`mt-2 block text-lg font-bold tabular-nums ${summary.color === 'emerald' ? 'text-emerald-600' : summary.color === 'rose' ? 'text-rose-600' : 'text-slate-600'}`}>{summary.count}</span>
+          </button>
+        ))}
+      </div>
+
       {/* Filter and Actions Bar */}
       <div className="space-y-3 border-b border-slate-200 bg-white p-3 sm:p-4 transition-all">
         {/* ===================== MOBILE DEDICATED LAYOUT (< sm) ===================== */}
         <div className="sm:hidden space-y-3">
-          {/* Top Quick Header: Live Indicator, View Mode & Register Driver */}
+          {/* Top Quick Header */}
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 min-w-0">
                 <span className="text-xs font-semibold text-slate-900">
@@ -398,34 +491,6 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
-              {/* Grid / List Toggle */}
-              <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/80">
-                <button
-                  type="button"
-                  onClick={() => setViewMode('grid')}
-                  className={`p-1.5 rounded-lg transition cursor-pointer ${
-                    viewMode === 'grid'
-                      ? 'bg-white text-slate-950 shadow-2xs'
-                      : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                  title="Card View"
-                >
-                  Grid
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('table')}
-                  className={`p-1.5 rounded-lg transition cursor-pointer ${
-                    viewMode === 'table'
-                      ? 'bg-white text-slate-950 shadow-2xs'
-                      : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                  title="List View"
-                >
-                  List
-                </button>
-              </div>
-
               {/* Quick Register Driver Button */}
               <button
                 onClick={onOpenNewDriverModal}
@@ -473,6 +538,9 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
               { id: 'OFFLINE', label: 'Offline', count: offlineDriversCount, badge: 'bg-slate-100 text-slate-600' },
               { id: 'BLOCKED', label: 'Blocked', count: blockedDrivers.length, badge: 'bg-rose-100 text-rose-800 font-bold' },
               { id: 'WITH_DUES', label: 'Has Due', count: driversWithDue.length, badge: 'bg-amber-400 text-slate-950 font-black' },
+              { id: 'SUB_ACTIVE', label: 'Subscribed', count: activeSubscriptions.length, badge: 'bg-emerald-100 text-emerald-800 font-bold' },
+              { id: 'SUB_EXPIRED', label: 'Expired', count: expiredSubscriptions.length, badge: 'bg-rose-100 text-rose-800 font-bold' },
+              { id: 'SUB_NONE', label: 'No Subscription', count: noSubscriptions.length, badge: 'bg-slate-100 text-slate-600' },
             ].map((tab) => {
               const isActive = statusFilter === tab.id;
               return (
@@ -566,7 +634,7 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
         <div className="hidden sm:flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
           {/* Left Filter Tabs - Wrapping so NO options are hidden */}
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-            {['ALL', 'ACTIVE', 'ONLINE', 'OFFLINE', 'BLOCKED', 'WITH_DUES'].map((st) => (
+            {['ALL', 'ACTIVE', 'ONLINE', 'OFFLINE', 'BLOCKED', 'WITH_DUES', 'SUB_ACTIVE', 'SUB_EXPIRED', 'SUB_NONE'].map((st) => (
               <button
                 key={st}
                 onClick={() => {
@@ -579,7 +647,7 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
                     : 'bg-slate-100/90 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
                 }`}
               >
-                <span>{st === 'WITH_DUES' ? 'Has Due' : st === 'ACTIVE' ? 'Active' : st}</span>
+                <span>{st === 'WITH_DUES' ? 'Has Due' : st === 'SUB_ACTIVE' ? 'Subscribed' : st === 'SUB_EXPIRED' ? 'Expired' : st === 'SUB_NONE' ? 'No Subscription' : st === 'ACTIVE' ? 'Active' : st}</span>
                 {st === 'WITH_DUES' && driversWithDue.length > 0 && (
                   <span className="ml-0.5 text-[10px] font-bold bg-amber-500 text-slate-950 px-1.5 py-0.2 rounded-full">
                     {driversWithDue.length}
@@ -589,36 +657,8 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
             ))}
           </div>
 
-          {/* Right Search, Category, View Mode & Registration */}
+          {/* Right Search, Category & Registration */}
           <div className="flex flex-wrap items-center gap-2">
-            {/* View Mode Grid/Table toggle */}
-            <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
-              <button
-                type="button"
-                onClick={() => setViewMode('grid')}
-                className={`p-1.5 rounded transition cursor-pointer ${
-                  viewMode === 'grid'
-                    ? 'bg-white text-slate-950 shadow-2xs'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-                title="Card View"
-              >
-                Grid
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode('table')}
-                className={`p-1.5 rounded transition cursor-pointer ${
-                  viewMode === 'table'
-                    ? 'bg-white text-slate-950 shadow-2xs'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-                title="Table View"
-              >
-                List
-              </button>
-            </div>
-
             {/* Category Dropdown */}
             <div className="relative">
               <select
@@ -719,94 +759,106 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
             <span>Add Driver</span>
           </button>
         </div>
-      ) : viewMode === 'grid' ? (
+      ) : (
         /* Driver Grid Cards (Image 1 & 6 style) */
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 gap-4 bg-slate-50 p-1 sm:gap-5 md:grid-cols-2 lg:grid-cols-3">
           {paginatedDrivers.map((drv) => (
             <div
               key={drv.driver_id}
-              className="flex flex-col justify-between rounded-lg border border-slate-200 bg-white p-4 transition-colors hover:border-orange-300"
+              className="relative flex min-h-[342px] flex-col justify-between rounded-[22px] border border-slate-200/80 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.07)] transition-shadow hover:shadow-[0_12px_30px_rgba(15,23,42,0.11)] sm:p-5"
             >
               <div>
-                {/* Header: Driver Name, ID, Category & Trips */}
+                {/* Compact driver header */}
                 <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h4 className="text-sm font-bold leading-tight text-slate-950">
+                  <div className="min-w-0">
+                    <div className="min-w-0">
+                    <h4 className="truncate text-[15px] font-bold leading-tight text-slate-950">
                       {drv.driver_name}{' '}
-                      <span className={drv.status === 'ACTIVE' ? 'font-semibold text-emerald-700' : 'font-semibold text-red-700'}>
+                      <span className="hidden">
                         — {drv.status === 'ACTIVE' ? 'Active' : 'Blocked'}
                       </span>
                     </h4>
-                    <div className="mt-1 text-xs text-slate-600">
+                    <div className="mt-1 truncate text-[13px] text-slate-600">
                       ID: <span className="font-mono text-slate-900">{drv.driver_id}</span> · {drv.vehicle_category}
                     </div>
                     <div className="hidden">
                       ID: <span className="font-mono text-slate-900">{drv.driver_id}</span> · {drv.vehicle_category} · <span className={drv.status === 'ACTIVE' ? 'text-emerald-700' : 'text-red-700'}>{drv.status === 'ACTIVE' ? 'Active' : 'Blocked'}</span>
                     </div>
+                    </div>
                   </div>
 
                   <div className="text-right">
-                    <span className="text-xs font-medium text-slate-600">
-                      {drv.total_trips || 0} trips
-                    </span>
+                    <span className={`inline-block rounded-lg px-2.5 py-1.5 text-[11px] font-bold ${getSubscriptionValidity(drv, now) === 'ACTIVE' ? 'bg-emerald-100 text-emerald-700' : getSubscriptionValidity(drv, now) === 'EXPIRED' ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'}`}>{getSubscriptionValidity(drv, now) === 'NONE' ? 'None' : getSubscriptionValidity(drv, now) === 'ACTIVE' ? 'Active' : 'Expired'}</span>
                   </div>
                 </div>
 
                 {/* Details specs */}
-                <div className="mt-4 space-y-2 border-t border-slate-100 pt-3 text-xs">
-                  <div className="flex items-center justify-between text-slate-600">
-                    <span className="text-slate-500">Vehicle</span>
-                    <strong className="text-slate-800 font-mono font-medium">{drv.vehicle_number}</strong>
+                <div className="mt-4 space-y-2.5 border-t border-slate-100 pt-3 text-[13px]">
+                  <div className="flex min-w-0 items-center justify-between gap-4 text-slate-800">
+                    <span className="shrink-0 font-medium text-slate-700">Vehicle</span>
+                    <strong className="truncate text-right font-mono font-medium">{drv.vehicle_number || '—'}</strong>
                   </div>
 
-                  <div className="flex items-center justify-between text-slate-600">
-                    <span className="text-slate-500">Phone</span>
+                  <div className="flex min-w-0 items-center justify-between gap-4 text-slate-800">
+                    <span className="shrink-0 font-medium text-slate-700">Phone</span>
                     <a
                       href={`tel:${drv.mobile_number}`}
-                      className="text-orange-700 font-medium hover:underline"
+                      className="truncate text-right font-medium text-slate-800 hover:underline"
                     >
                       {drv.mobile_number}
                     </a>
                   </div>
 
-                  <div className="flex items-center justify-between text-slate-600">
-                    <span className="text-slate-500">License Expiry</span>
-                    <span className="text-slate-700 font-normal">{drv.expiry_date || 'N/A'}</span>
+                  <div className="flex min-w-0 items-center justify-between gap-4 text-slate-800">
+                    <span className="shrink-0 font-medium text-slate-700">License Expiry</span>
+                    <span className="truncate text-right font-medium text-slate-800">{drv.expiry_date || 'N/A'}</span>
+                  </div>
+
+                  <div className="space-y-2 border-t border-slate-100 pt-2.5">
+                    <div className="flex min-w-0 items-center justify-between gap-4">
+                      <span className="shrink-0 font-medium text-slate-700">Subscription</span>
+                      <span className={`font-semibold ${getSubscriptionValidity(drv, now) === 'ACTIVE' ? 'text-emerald-700' : getSubscriptionValidity(drv, now) === 'EXPIRED' ? 'text-rose-700' : 'text-slate-500'}`}>
+                        {drv.subscription_plan || 'No Subscription'} · {getSubscriptionValidity(drv, now)}
+                      </span>
+                    </div>
+                    <div className="flex min-w-0 justify-between gap-4 text-[13px] text-slate-700"><span className="shrink-0 font-medium">Valid From</span><span className="truncate text-right font-medium">{formatKolkataDate(drv.subscription_start_at)}</span></div>
+                    <div className="flex min-w-0 justify-between gap-4 text-[13px] text-slate-700"><span className="shrink-0 font-medium">Valid Until</span><span className="truncate text-right font-medium">{formatKolkataDate(drv.subscription_expires_at)}</span></div>
+                    <div className={`flex min-w-0 justify-between gap-4 text-[13px] font-semibold ${getSubscriptionValidity(drv, now) === 'ACTIVE' ? 'text-emerald-700' : getSubscriptionValidity(drv, now) === 'EXPIRED' ? 'text-rose-700' : 'text-slate-500'}`}><span className="shrink-0">Remaining</span><span className="truncate text-right">{remainingValidity(drv.subscription_expires_at, now)}</span></div>
                   </div>
 
                   {/* Android Hardware Device ID Box */}
-                  <div className="space-y-1 border-t border-slate-100 pt-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium text-slate-600">Device Status</span>
+                  <div className="space-y-2 border-t border-slate-100 pt-2.5">
+                    <div className="flex min-w-0 items-center justify-between gap-4 text-[13px]">
+                      <span className="shrink-0 font-medium text-slate-700">Device Status</span>
                       {drv.device_id ? (
-                        <span className="text-xs font-medium text-emerald-700">Bound</span>
+                        <span className="font-medium text-emerald-700">Bound</span>
                       ) : (
-                        <span className="text-xs font-medium text-slate-600">Unbound</span>
+                        <span className="font-medium text-slate-500">Unbound</span>
                       )}
                     </div>
                   </div>
 
                   {/* Office Due & Driver Payment Status */}
                   <div
-                    className={`flex items-center justify-between gap-2 border-t pt-2 ${
+                    className={`flex min-w-0 items-center justify-between gap-4 border-t pt-2.5 text-[13px] ${
                       (drv.payment_amount || 0) > 0
                         ? 'border-amber-200'
                         : 'border-slate-100'
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium text-slate-600">Office Due</span>
+                    <div className="flex min-w-0 flex-1 items-center justify-between gap-4">
+                      <span className="shrink-0 font-medium text-slate-700">Office Due</span>
                       {(drv.payment_amount || 0) > 0 ? (
-                        <span className="text-[11px] font-semibold text-amber-800">
+                        <span className="truncate text-right font-medium text-amber-800">
                           <span>₹{drv.payment_amount} · Due</span>
                         </span>
                       ) : (
-                        <span className="text-[10px] font-medium text-emerald-700">
+                        <span className="whitespace-nowrap font-medium text-emerald-700">
                           Cleared (₹0)
                         </span>
                       )}
                     </div>
-                    <div className="contents">
+                    <div className="hidden">
                       <button
                         type="button"
                         onClick={() => openDueModal(drv)}
@@ -820,8 +872,15 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
                 </div>
               </div>
 
-              {/* Actions Toolbar */}
-              <div className="mt-4 grid grid-cols-2 gap-2 border-t border-slate-100 pt-3">
+              {/* Primary card actions; legacy actions remain in the overflow menu below. */}
+              <div className="relative mt-5 flex items-center gap-2 border-t border-slate-100 pt-3">
+                <button type="button" onClick={() => openValidityEditor(drv)} className="min-h-10 flex-1 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-slate-700">Edit Validity</button>
+                <button type="button" onClick={() => handleOpenEditDriver(drv)} className="min-h-10 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-900 shadow-sm transition hover:bg-slate-50">Edit</button>
+                <button type="button" onClick={() => setOpenDriverMenuId(openDriverMenuId === drv.driver_id ? null : drv.driver_id)} className="min-h-10 w-10 shrink-0 rounded-xl border border-slate-200 bg-white text-slate-900 shadow-sm transition hover:bg-slate-50" aria-label={`More actions for ${drv.driver_name}`}><MoreVertical className="mx-auto h-4 w-4" /></button>
+                {openDriverMenuId === drv.driver_id && <div className="absolute bottom-14 right-0 z-20 w-44 rounded-xl border border-slate-200 bg-white p-1.5 text-left shadow-xl"><button type="button" onClick={() => { openDueModal(drv); setOpenDriverMenuId(null); }} className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium hover:bg-slate-50">Dues / Set Due</button><button type="button" onClick={() => { onResetDeviceBinding(drv.driver_id); setOpenDriverMenuId(null); }} className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium hover:bg-slate-50">Reset Device</button><button type="button" onClick={() => { onToggleDriverStatus(drv.driver_id); setOpenDriverMenuId(null); }} className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium hover:bg-slate-50">{drv.status === 'BLOCKED' ? 'Unblock Driver' : 'Block Driver'}</button><button type="button" onClick={() => { setDriverToDelete(drv); setOpenDriverMenuId(null); }} className="block w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-rose-700 hover:bg-rose-50">Delete Driver</button></div>}
+              </div>
+
+              <div className="hidden">
                 <button
                   onClick={() => openDueModal(drv)}
                   title="Manage Driver Office Due (Update amount in driver app)"
@@ -865,6 +924,9 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
                 >
                   Edit Driver
                 </button>
+                <button type="button" onClick={() => openValidityEditor(drv)} className="col-span-2 min-h-10 w-full rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-800 transition-colors hover:bg-sky-100">
+                  Edit Validity
+                </button>
 
                 <button
                   onClick={() => setDriverToDelete(drv)}
@@ -877,9 +939,9 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
             </div>
           ))}
         </div>
-      ) : (
+      )}
+      {false && (
         <>
-          {/* Desktop Driver Table View */}
           <div className="hidden overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-2xs md:block">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs text-slate-600">
@@ -890,6 +952,7 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
                   <th className="py-3.5 px-4">Mobile Phone</th>
                   <th className="py-3.5 px-4">GPS Status</th>
                   <th className="py-3.5 px-4">Office Due</th>
+                  <th className="py-3.5 px-4">Subscription</th>
                   <th className="py-3.5 px-4">KYC State</th>
                   <th className="py-3.5 px-4">Device Lock</th>
                   <th className="py-3.5 px-4 text-right">Actions</th>
@@ -905,6 +968,14 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
                           {drv.driver_id}
                         </div>
                       </div>
+                    </td>
+
+                    <td className="py-3.5 px-4">
+                      <div className={`font-semibold ${getSubscriptionValidity(drv, now) === 'ACTIVE' ? 'text-emerald-700' : getSubscriptionValidity(drv, now) === 'EXPIRED' ? 'text-rose-700' : 'text-slate-500'}`}>{drv.subscription_plan || 'No Subscription'}</div>
+                      <div className="text-[10px]">{getSubscriptionValidity(drv, now)} · {remainingValidity(drv.subscription_expires_at, now)}</div>
+                      <div className="text-[10px] text-slate-500">From {formatKolkataDate(drv.subscription_start_at)}</div>
+                      <div className="text-[10px] text-slate-500">Until {formatKolkataDate(drv.subscription_expires_at)}</div>
+                      <button type="button" onClick={() => openValidityEditor(drv)} className="mt-1 rounded border border-sky-200 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 hover:bg-sky-50">Edit Validity</button>
                     </td>
 
                     <td className="py-3.5 px-4">
@@ -1036,7 +1107,6 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
           </div>
           </div>
 
-          {/* Compact mobile list view keeps every driver action reachable without horizontal scrolling. */}
           <div className="divide-y divide-slate-200 border-y border-slate-200 bg-white pb-24 md:hidden">
             {paginatedDrivers.map((drv) => (
               <section key={drv.driver_id} className="px-3 py-4 sm:px-4">
@@ -1078,6 +1148,8 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
                       {(drv.payment_amount || 0) > 0 ? `₹${drv.payment_amount} Due` : 'Cleared'}
                     </dd>
                   </div>
+                  <div className="flex flex-wrap justify-between gap-x-3 gap-y-0.5"><dt className="text-slate-500">Subscription</dt><dd className={getSubscriptionValidity(drv, now) === 'ACTIVE' ? 'font-medium text-emerald-700' : getSubscriptionValidity(drv, now) === 'EXPIRED' ? 'font-medium text-rose-700' : 'text-slate-500'}>{drv.subscription_plan || 'No Subscription'} · {getSubscriptionValidity(drv, now)} · {remainingValidity(drv.subscription_expires_at, now)}</dd></div>
+                  <div className="flex flex-wrap justify-between gap-x-3 gap-y-0.5"><dt className="text-slate-500">Valid From / Until</dt><dd className="text-right text-slate-700">{formatKolkataDate(drv.subscription_start_at)} / {formatKolkataDate(drv.subscription_expires_at)}</dd></div>
                   <div className="flex flex-wrap justify-between gap-x-3 gap-y-0.5">
                     <dt className="text-slate-500">Device</dt>
                     <dd className="max-w-[68%] break-all text-right text-slate-700">
@@ -1119,6 +1191,7 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
                   >
                     Edit Driver
                   </button>
+                  <button type="button" onClick={() => openValidityEditor(drv)} className="min-h-10 rounded-md border border-sky-300 px-3 py-2 text-xs font-medium text-sky-800 transition hover:bg-sky-50">Edit Validity</button>
                   <button
                     type="button"
                     onClick={() => setDriverToDelete(drv)}
@@ -1803,6 +1876,21 @@ export const DriverManagement: React.FC<DriverManagementProps> = ({
             />
             <p className="text-center text-xs text-slate-500 mt-2 font-medium">Click anywhere to close</p>
           </div>
+        </div>
+      )}
+
+      {validityDriver && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true" aria-labelledby="edit-validity-title">
+          <form onSubmit={saveValidity} className="w-full max-w-sm rounded-xl bg-white p-4 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div><h3 id="edit-validity-title" className="text-base font-bold text-slate-950">Edit Validity</h3><p className="mt-1 text-xs text-slate-500">{validityDriver.driver_name} · Asia/Kolkata</p></div>
+              <button type="button" onClick={() => setValidityDriver(null)} className="rounded p-1 text-slate-500 hover:bg-slate-100" aria-label="Close">×</button>
+            </div>
+            <label className="mt-4 block text-xs font-semibold text-slate-700">Subscription expiry</label>
+            <input type="datetime-local" required value={validityInput} onChange={(event) => setValidityInput(event.target.value)} className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-900 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500" />
+            {validityFeedback && <p className="mt-2 text-xs font-medium text-rose-700">{validityFeedback}</p>}
+            <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setValidityDriver(null)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700">Cancel</button><button type="submit" disabled={isSavingValidity || !validityInput} className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{isSavingValidity ? 'Saving…' : 'Save Validity'}</button></div>
+          </form>
         </div>
       )}
 
